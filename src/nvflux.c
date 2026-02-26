@@ -104,8 +104,11 @@ static int read_state(uid_t real_uid, char *buf, size_t len) {
     return 1;
 }
 
-/* execute argv (argv[0]=path) and capture stdout into outbuf (NUL-terminated) */
-static int exec_capture(char *const argv[], char *outbuf, size_t outlen) {
+/* execute argv (argv[0]=path) and capture stdout into outbuf (NUL-terminated).
+ * if capture_stderr is non-zero, stderr is merged into the output buffer;
+ * otherwise stderr is silenced (redirected to /dev/null) so that nvidia-smi
+ * error/warning messages cannot contaminate parsed numeric output. */
+static int exec_capture(char *const argv[], char *outbuf, size_t outlen, int capture_stderr) {
     int pipefd[2];
     if (pipe(pipefd) < 0) return -1;
     pid_t pid = fork();
@@ -114,7 +117,12 @@ static int exec_capture(char *const argv[], char *outbuf, size_t outlen) {
         /* child */
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
-        dup2(pipefd[1], STDERR_FILENO); /* also capture stderr */
+        if (capture_stderr) {
+            dup2(pipefd[1], STDERR_FILENO);
+        } else {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+        }
         close(pipefd[1]);
         execv(argv[0], argv);
         _exit(127);
@@ -165,7 +173,7 @@ int nvflux_parse_clocks(const char *txt, int *clocks, int max) {
 static int get_mem_clocks(int *clocks, int max) {
     char out[READ_BUF];
     char *argv[] = { nvsmipath, "--query-supported-clocks=memory", "--format=csv,noheader,nounits", NULL };
-    int rc = exec_capture(argv, out, sizeof(out));
+    int rc = exec_capture(argv, out, sizeof(out), 0);
     if (rc < 0) return -1;
     return nvflux_parse_clocks(out, clocks, max);
 }
@@ -177,7 +185,7 @@ static int get_current_mem_clock(void) {
     char *q1[] = { nvsmipath, "--query-gpu=clocks.mem", "--format=csv,noheader,nounits", NULL };
     char *q2[] = { nvsmipath, "--query-gpu=memory.clock", "--format=csv,noheader,nounits", NULL };
 
-    if (exec_capture(q1, out, sizeof(out)) >= 0) {
+    if (exec_capture(q1, out, sizeof(out), 0) >= 0) {
         /* parse first integer */
         const char *p = out;
         while (*p && (*p < '0' || *p > '9')) p++;
@@ -185,7 +193,7 @@ static int get_current_mem_clock(void) {
         return (int)strtol(p, NULL, 10);
     }
 
-    if (exec_capture(q2, out, sizeof(out)) >= 0) {
+    if (exec_capture(q2, out, sizeof(out), 0) >= 0) {
         const char *p = out;
         while (*p && (*p < '0' || *p > '9')) p++;
         if (!*p) return -1;
@@ -240,13 +248,13 @@ static int get_graphics_clocks(int memclk, int *clocks, int max) {
     char memarg[64];
     snprintf(memarg, sizeof(memarg), "--mem-clock=%d", memclk);
     char *argv[] = { nvsmipath, "--query-supported-clocks=graphics", memarg, "--format=csv,noheader,nounits", NULL };
-    int rc = exec_capture(argv, out, sizeof(out));
+    int rc = exec_capture(argv, out, sizeof(out), 0);
     if (rc < 0) return -1;
     int count = nvflux_parse_clocks(out, clocks, max);
     /* fallback: if query with --mem-clock is unsupported by this driver version, retry without it */
     if (count <= 0) {
         char *fallback[] = { nvsmipath, "--query-supported-clocks=graphics", "--format=csv,noheader,nounits", NULL };
-        if (exec_capture(fallback, out, sizeof(out)) >= 0)
+        if (exec_capture(fallback, out, sizeof(out), 0) >= 0)
             count = nvflux_parse_clocks(out, clocks, max);
     }
     return count;
@@ -258,12 +266,12 @@ static int get_current_graphics_clock(void) {
     char *q1[] = { nvsmipath, "--query-gpu=clocks.gr", "--format=csv,noheader,nounits", NULL };
     char *q2[] = { nvsmipath, "--query-gpu=clocks.current.graphics", "--format=csv,noheader,nounits", NULL };
 
-    if (exec_capture(q1, out, sizeof(out)) >= 0) {
+    if (exec_capture(q1, out, sizeof(out), 0) >= 0) {
         const char *p = out;
         while (*p && (*p < '0' || *p > '9')) p++;
         if (*p) return (int)strtol(p, NULL, 10);
     }
-    if (exec_capture(q2, out, sizeof(out)) >= 0) {
+    if (exec_capture(q2, out, sizeof(out), 0) >= 0) {
         const char *p = out;
         while (*p && (*p < '0' || *p > '9')) p++;
         if (*p) return (int)strtol(p, NULL, 10);
@@ -314,7 +322,7 @@ static int is_allowed(const char *cmd) {
 static int check_nvidia_runtime(void) {
     char out[READ_BUF];
     char *argv[] = { nvsmipath, "--query-gpu=name", "--format=csv,noheader", NULL };
-    int rc = exec_capture(argv, out, sizeof(out));
+    int rc = exec_capture(argv, out, sizeof(out), 1); /* capture stderr to detect driver errors */
     if (rc < 0) {
         /* exec failure / cannot run nvidia-smi */
         fprintf(stderr, "Error: failed to execute %s. Is nvidia-smi available and executable?\n", nvsmipath);
