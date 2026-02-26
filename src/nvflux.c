@@ -242,22 +242,16 @@ static int reset_memory_clocks(void) {
     return run_nvsmicmd(try2);
 }
 
-/* get supported graphics clocks valid for a given memory clock */
-static int get_graphics_clocks(int memclk, int *clocks, int max) {
+/* get all supported graphics clocks (sorted descending).
+ * NOTE: do NOT pass --mem-clock here — nvidia-smi prepends the mem clock value
+ * to every CSV row when that option is used, which contaminates the parsed
+ * output.  All memory clock levels share the same graphics clock range anyway. */
+static int get_graphics_clocks(int *clocks, int max) {
     char out[READ_BUF];
-    char memarg[64];
-    snprintf(memarg, sizeof(memarg), "--mem-clock=%d", memclk);
-    char *argv[] = { nvsmipath, "--query-supported-clocks=graphics", memarg, "--format=csv,noheader,nounits", NULL };
+    char *argv[] = { nvsmipath, "--query-supported-clocks=graphics", "--format=csv,noheader,nounits", NULL };
     int rc = exec_capture(argv, out, sizeof(out), 0);
     if (rc < 0) return -1;
-    int count = nvflux_parse_clocks(out, clocks, max);
-    /* fallback: if query with --mem-clock is unsupported by this driver version, retry without it */
-    if (count <= 0) {
-        char *fallback[] = { nvsmipath, "--query-supported-clocks=graphics", "--format=csv,noheader,nounits", NULL };
-        if (exec_capture(fallback, out, sizeof(out), 0) >= 0)
-            count = nvflux_parse_clocks(out, clocks, max);
-    }
-    return count;
+    return nvflux_parse_clocks(out, clocks, max);
 }
 
 /* get current graphics clock */
@@ -430,33 +424,40 @@ int nvflux_run(int argc, char **argv) {
     int mem_mid = mem_clocks[mem_count / 2];
     int mem_low = mem_clocks[mem_count - 1];
 
+    /* Query graphics clocks once; clocks[] is sorted descending.
+     * Index selection per profile:
+     *   performance  — top ~5%  (near max, lean high)
+     *   balanced     — 50th percentile (middle of range)
+     *   powersaver   — bottom ~5% (near min, lean low)
+     * Using count/20 as the step avoids hard-coding any frequency value. */
+    int gfx_clocks[MAX_CLOCKS];
+    int gfx_count = get_graphics_clocks(gfx_clocks, MAX_CLOCKS);
+
     if (strcmp(cmd, "performance") == 0) {
-        int gfx_clocks[MAX_CLOCKS];
-        int gfx_count = get_graphics_clocks(mem_max, gfx_clocks, MAX_CLOCKS);
-        int gfx_max = gfx_count > 0 ? gfx_clocks[0] : -1;
-        if (apply_profile(mem_max, gfx_max) != 0) return 1;
+        int idx = (gfx_count > 1) ? gfx_count / 20 : 0;
+        int gfx = gfx_count > 0 ? gfx_clocks[idx] : -1;
+        if (apply_profile(mem_max, gfx) != 0) return 1;
         printf("Performance: memory %d MHz", mem_max);
-        if (gfx_max > 0) printf(", graphics %d MHz", gfx_max);
+        if (gfx > 0) printf(", graphics %d MHz", gfx);
         printf("\n");
         write_state(real_uid, "performance");
         return 0;
     } else if (strcmp(cmd, "balanced") == 0) {
-        int gfx_clocks[MAX_CLOCKS];
-        int gfx_count = get_graphics_clocks(mem_mid, gfx_clocks, MAX_CLOCKS);
-        int gfx_mid = gfx_count > 0 ? gfx_clocks[gfx_count / 2] : -1;
-        if (apply_profile(mem_mid, gfx_mid) != 0) return 1;
+        int idx = (gfx_count > 1) ? gfx_count / 2 : 0;
+        int gfx = gfx_count > 0 ? gfx_clocks[idx] : -1;
+        if (apply_profile(mem_mid, gfx) != 0) return 1;
         printf("Balanced: memory %d MHz", mem_mid);
-        if (gfx_mid > 0) printf(", graphics %d MHz", gfx_mid);
+        if (gfx > 0) printf(", graphics %d MHz", gfx);
         printf("\n");
         write_state(real_uid, "balanced");
         return 0;
     } else if (strcmp(cmd, "powersaver") == 0) {
-        int gfx_clocks[MAX_CLOCKS];
-        int gfx_count = get_graphics_clocks(mem_low, gfx_clocks, MAX_CLOCKS);
-        int gfx_low = gfx_count > 0 ? gfx_clocks[gfx_count - 1] : -1;
-        if (apply_profile(mem_low, gfx_low) != 0) return 1;
+        int step = (gfx_count > 1) ? gfx_count / 20 : 0;
+        int idx = (gfx_count > 1) ? (gfx_count - 1 - step) : 0;
+        int gfx = gfx_count > 0 ? gfx_clocks[idx] : -1;
+        if (apply_profile(mem_low, gfx) != 0) return 1;
         printf("Power Saver: memory %d MHz", mem_low);
-        if (gfx_low > 0) printf(", graphics %d MHz", gfx_low);
+        if (gfx > 0) printf(", graphics %d MHz", gfx);
         printf("\n");
         write_state(real_uid, "powersaver");
         return 0;
