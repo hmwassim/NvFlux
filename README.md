@@ -32,9 +32,9 @@ sudo ./scripts/install.sh
 # 3. Use it
 nvflux performance   # Max performance
 nvflux balanced      # Balanced mode
-nvflux powersaver    # Power saving
+nvflux powersave     # Power saving
 nvflux reset         # Auto (driver managed)
-nvflux status        # Show current profile
+nvflux status        # Show current profile and live clocks
 ```
 
 ## Documentation
@@ -51,14 +51,14 @@ nvflux status        # Show current profile
 # Switch profiles
 nvflux performance
 nvflux balanced
-nvflux powersaver
+nvflux powersave
 
 # Reset to automatic
 nvflux auto         # or: nvflux reset
 
 # Query status
-nvflux status       # Show saved profile
-nvflux clock        # Show current memory & graphics clocks (MHz)
+nvflux status             # Profile, applied time, clocks, temp
+nvflux clock <mem> <gfx>  # Lock to specific MHz values
 
 # Restore on boot
 nvflux --restore    # Apply saved profile
@@ -88,16 +88,20 @@ exec --no-startup-id nvflux --restore
 
 ```
 nvflux (setuid root)
-├── src/main.c          # Entry point, version handling
-├── src/nvflux.c        # Core logic (privilege management, nvidia-smi calls)
-├── include/nvflux.h    # Public API
+├── src/main.c          # Entry point, version flag
+├── src/nvflux.c        # Profile logic, public API (nvflux_run, nvflux_parse_clocks)
+├── src/hw.c            # All nvidia-smi interaction (queries, locks, temp)
+├── src/state.c         # State file read/write (~/.local/state/nvflux/state)
+├── include/nvflux.h    # Public API declarations
+├── include/hw.h        # Hardware layer API
+├── include/state.h     # State struct and API
 └── tests/test_nvflux.c # Unit tests (no root required)
 ```
 
 **Security Model:**
 - Validates all commands against allowlist
 - No arbitrary string injection into nvidia-smi
-- Clock values are queried from GPU, never user-supplied
+- Clock values are queried from GPU; only `clock <mem> <gfx>` accepts user values (clamped to driver ceiling)
 - State files owned by real UID, not root
 - See [docs/SECURITY.md](docs/SECURITY.md) for full analysis
 
@@ -130,7 +134,16 @@ sudo gzip -c man/nvflux.1 > /usr/local/share/man/man1/nvflux.1.gz
 - **Runtime:** NVIDIA drivers with `nvidia-smi`
 - **Build:** C compiler (GCC/Clang), CMake 3.10+, gzip
 
-See [docs/INSTALLATION.md](docs/INSTALLATION.md) for distro-specific package names.
+| Distro | Build deps |
+|--------|------------|
+| Debian/Ubuntu | `sudo apt install build-essential cmake gzip` |
+| Arch Linux | `sudo pacman -Syu base-devel cmake gzip nvidia-utils` |
+| Fedora/RHEL | `sudo dnf install @development-tools cmake gzip` |
+| openSUSE | `sudo zypper install -t pattern devel_C_C++ cmake gzip` |
+| Void Linux | `sudo xbps-install -S base-devel cmake gzip nvidia-utils` |
+| Solus | `sudo eopkg it -c system.devel` |
+
+See [docs/INSTALLATION.md](docs/INSTALLATION.md) for more detail.
 
 ## Testing
 

@@ -1,57 +1,105 @@
 .\" Manual page for nvflux
 .TH NVFLUX 1 "February 2026" "nvflux 1.1" "User Commands"
 .SH NAME
-nvflux \- manage NVIDIA GPU profiles (safe, limited nvidia-smi helper)
+nvflux \- manage NVIDIA GPU clock profiles without sudo
 .SH SYNOPSIS
 .B nvflux
-[\fICOMMAND\fR]
+\fICOMMAND\fR [\fIARGS\fR]
 .SH DESCRIPTION
-nvflux is a small, minimal setuid-root helper that allows unprivileged users to run
-a constrained subset of nvidia-smi operations to change GPU persistence, memory
-clock and graphics clock behaviour. It is intended for desktop use so users can
-switch GPU profiles without sudo.
+nvflux is a small, setuid-root helper that lets unprivileged desktop users switch
+NVIDIA GPU clock profiles without sudo. It provides a constrained interface to
+nvidia-smi: only a fixed set of allowlisted commands are accepted; clock values
+are always queried from the GPU rather than supplied by the user.
+.PP
+On application, nvflux waits for the driver to settle and reports the actual
+clocks the driver applied (which may differ from what was requested due to boost
+clock ceilings). A rich state file at
+.I ~/.local/state/nvflux/state
+is updated after each profile change.
 .SH COMMANDS
 .TP
 .B performance
-Lock GPU memory and graphics clocks to the highest supported values.
+Lock to the highest supported memory clock and near-peak graphics clock.
+Temperature safety check: refused when GPU \[>=] 90\[de]C.
 .TP
 .B balanced
-Lock GPU memory and graphics clocks to mid-range supported values.
+Lock to mid-range memory and graphics clocks.
+Temperature safety check: refused when GPU \[>=] 90\[de]C.
 .TP
-.B powersaver
-Lock GPU memory and graphics clocks to the lowest supported values.
+.B powersave
+Lock to the lowest supported memory clock and near-floor graphics clock.
+Always permitted regardless of temperature.
 .TP
-.B auto, reset
-Reset all clock locks so the driver can manage clocks automatically.
+.B auto
+Select a profile automatically based on current GPU temperature:
+\[<=] 60\[de]C \[->] performance, 61\-79\[de]C \[->] balanced, \[>=] 80\[de]C \[->] powersave.
+.TP
+.B reset
+Remove all clock locks; the driver manages clocks automatically.
 .TP
 .B status
-Show last saved profile for the calling (real) user.
+Show the last applied profile and clocks from the state file, alongside live
+readings from the driver. Example output:
+.nf
+  \[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]
+  Profile:  Power Save
+  Applied:  2026-02-26T03:15:22
+  Memory:   810 MHz
+  Graphics: 487 MHz
+  Temp:     58\[de]C
+  \[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]\[u2500]
+.fi
 .TP
-.B clock
-Print current GPU memory and graphics clocks (MHz) as reported by nvidia-smi.
+.B clock \fImem_mhz\fR \fIgfx_mhz\fR
+Lock to specific MHz values.  The graphics value is clamped to the driver
+ceiling (\fIclocks.max.gr\fR) if it exceeds the lockable range.
 .TP
-.B --restore
-Reapply last saved profile for the calling user (reads ~/.local/state/nvflux/state).
+.B \-\-restore
+Re-apply the last saved profile (reads the state file). Useful in autostart
+scripts and systemd services.
 .TP
-.B -h, --help
-Show help and exit.
+.B \-h, \-\-help
+Show usage and exit.
 .TP
-.B -v, --version
+.B \-v, \-\-version
 Show version and exit.
+.SH TEMPERATURE SAFETY
+nvflux reads the GPU core temperature before applying a profile:
+.RS 4
+.IP "\[bu] 2"
+\[>=] 80\[de]C: a warning is printed but the profile is still applied.
+.IP "\[bu] 2"
+\[>=] 90\[de]C: performance and balanced are refused. Use \fBpowersave\fR or \fBreset\fR instead.
+.RE
 .SH EXAMPLES
 .TP
-Restore last saved profile on login:
+Restore last saved profile on login (i3/Sway config):
 .B exec --no-startup-id nvflux --restore
 .TP
-Switch to performance profile:
+Switch to performance mode:
 .B nvflux performance
+.TP
+Lock to custom clocks:
+.B nvflux clock 7501 1920
+.TP
+Check current profile and live clocks:
+.B nvflux status
 .SH FILES
 .TP
 .B ~/.local/state/nvflux/state
-Per-user saved profile (created/updated by nvflux).
+Per-user state file (key=value format). Created and updated by nvflux after
+each profile change. Contains: mode, timestamp, memory_mhz, graphics_mhz, temp_c.
+.TP
+.B /usr/local/bin/nvflux
+Installed setuid-root binary.
+.SH NOTES
+nvflux uses direct \fIexecv()\fR calls to invoke nvidia-smi; no shell is involved.
+All nvidia-smi lock/reset output is silenced; nvflux prints its own clean summary.
+Clock values are always queried from the GPU \[em] users cannot inject arbitrary values
+except through the \fBclock\fR command, which validates and clamps the input.
 .SH SEE ALSO
 .BR nvidia-smi (1)
 .SH AUTHOR
 Written by Habibi Med Wassim.
 .SH LICENSE
-See the LICENSE file distributed with this software.
+MIT — see the LICENSE file distributed with this software.

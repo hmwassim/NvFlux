@@ -58,6 +58,13 @@ int hw_current_mem_clock(void);
 int hw_current_graphics_clock(void);
 
 /*
+ * hw_current_clocks(mem_out, gfx_out)
+ *   Query both memory and graphics clocks in a single nvidia-smi invocation.
+ *   Writes results into *mem_out and *gfx_out (-1 on failure for each).
+ */
+void hw_current_clocks(int *mem_out, int *gfx_out);
+
+/*
  * hw_gpu_temp(void)
  *   Return the current GPU core temperature in °C, or -1 on error.
  */

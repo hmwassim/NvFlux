@@ -1,49 +1,67 @@
 #!/bin/sh
-set -e
+# check-deps.sh — verify build and runtime dependencies for nvflux
 
-echo "nvflux dependency checker"
+PASS="[ok]"
+FAIL="[missing]"
 
-need="cmake gcc make nvidia-smi gzip"
+echo "nvflux dependency check"
+echo "─────────────────────────────"
+
+need="cmake gcc make gzip nvidia-smi"
 missing=""
 for cmd in $need; do
-    if ! command -v "$cmd" >/dev/null 2>&1; then
+    if command -v "$cmd" >/dev/null 2>&1; then
+        echo "  $PASS  $cmd"
+    else
+        echo "  $FAIL $cmd"
         missing="$missing $cmd"
     fi
 done
 
+echo "─────────────────────────────"
+
 if [ -z "$missing" ]; then
-    echo "All basic dependencies present."
+    echo "All dependencies present."
     exit 0
 fi
 
 echo "Missing:$missing"
+echo ""
+
 if [ -f /etc/os-release ]; then
     . /etc/os-release
-    id_like="${ID_LIKE:-$ID}"
+    dist="${ID_LIKE:-$ID}"
 else
-    id_like=""
+    dist=""
 fi
 
-echo "Install suggestions by distro:"
-case "$id_like" in
+echo "Install suggestion for your distro:"
+case "$dist" in
     *debian*|*ubuntu*|debian|ubuntu)
-        echo "  sudo apt update && sudo apt install build-essential cmake gzip nvidia-utils"
+        echo "  sudo apt update && sudo apt install build-essential cmake gzip"
+        echo "  # NVIDIA: sudo apt install nvidia-utils  (or nvidia-cuda-toolkit)"
         ;;
     *arch*|arch)
         echo "  sudo pacman -Syu base-devel cmake gzip nvidia-utils"
         ;;
-    *rhel*|*fedora*|fedora)
+    *fedora*|*rhel*|*centos*|fedora|rhel|centos)
         echo "  sudo dnf install @development-tools cmake gzip"
-        echo "  # NVIDIA: install vendor/RPM Fusion packages (nvidia-utils)"
+        echo "  # NVIDIA: install via RPM Fusion — https://rpmfusion.org"
         ;;
-    *suse*|suse)
+    *suse*|suse|opensuse*)
         echo "  sudo zypper install -t pattern devel_C_C++ cmake gzip"
+        echo "  # NVIDIA: sudo zypper install nvidia-driver"
         ;;
     *void*|void)
         echo "  sudo xbps-install -S base-devel cmake gzip nvidia-utils"
         ;;
+    solus)
+        echo "  sudo eopkg it -c system.devel"
+        echo "  # NVIDIA driver is included in Solus; ensure it is activated"
+        ;;
     *)
-        echo "  Install a C compiler, cmake or make, and the NVIDIA driver utilities for your distro."
+        echo "  Install a C compiler, cmake, make, gzip, and the NVIDIA driver"
+        echo "  utilities (provides nvidia-smi) for your distribution."
         ;;
 esac
 

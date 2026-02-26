@@ -303,6 +303,33 @@ int hw_current_graphics_clock(void)
     return (v > 0) ? v : -1;
 }
 
+void hw_current_clocks(int *mem_out, int *gfx_out)
+{
+    /* Query both clocks in one nvidia-smi invocation: output is "mem, gfx\n" */
+    const char * const argv[] = {
+        nvsmipath,
+        "--query-gpu=clocks.current.memory,clocks.current.graphics",
+        "--format=csv,noheader,nounits",
+        NULL
+    };
+    char buf[256];
+    *mem_out = -1;
+    *gfx_out = -1;
+    if (exec_capture(argv, buf, sizeof(buf)) <= 0)
+        return;
+    /* parse two comma-separated integers */
+    char *p = buf;
+    while (*p && (*p < '0' || *p > '9')) p++;
+    if (!*p) return;
+    *mem_out = (int)strtol(p, &p, 10);
+    /* skip separator (', ') */
+    while (*p && (*p < '0' || *p > '9')) p++;
+    if (!*p) return;
+    *gfx_out = (int)strtol(p, NULL, 10);
+    if (*mem_out <= 0) *mem_out = -1;
+    if (*gfx_out <= 0) *gfx_out = -1;
+}
+
 int hw_gpu_temp(void)
 {
     const char * const argv[] = {

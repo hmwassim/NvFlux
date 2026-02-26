@@ -40,7 +40,7 @@
 
 /* Readback polling */
 #define READBACK_POLL_MS     100
-#define READBACK_TIMEOUT_MS 2000
+#define READBACK_TIMEOUT_MS 1000
 
 /* ------------------------------------------------------------------ */
 /*  Public API — nvflux_parse_clocks                                   */
@@ -132,8 +132,8 @@ static int read_clocks_stable(int before_mem, int before_gfx,
         nanosleep(&ts, NULL);
         elapsed += READBACK_POLL_MS;
 
-        int cm = hw_current_mem_clock();
-        int cg = hw_current_graphics_clock();
+        int cm, cg;
+        hw_current_clocks(&cm, &cg);   /* single nvidia-smi invocation */
 
         if (!changed) {
             if (cm != before_mem || cg != before_gfx)
@@ -246,8 +246,8 @@ static int apply_profile(int mem_pct, int gfx_pct, const char *mode_str,
     int target_gfx = pick_clock_at_pct(gfx_clocks, gfx_n, gfx_pct);
 
     /* 4. Snapshot current clocks before locking */
-    int before_mem = hw_current_mem_clock();
-    int before_gfx = hw_current_graphics_clock();
+    int before_mem, before_gfx;
+    hw_current_clocks(&before_mem, &before_gfx);
 
     /* 5. Apply */
     hw_enable_persistence();
@@ -261,9 +261,15 @@ static int apply_profile(int mem_pct, int gfx_pct, const char *mode_str,
         return 1;
     }
 
-    /* 6. Wait for driver to settle */
+    /* 6. Wait for driver to settle.
+     * Fast path: if clocks were already at the target (same profile re-applied
+     * or driver snapped immediately), skip polling and take a single read. */
     int real_mem = -1, real_gfx = -1;
-    read_clocks_stable(before_mem, before_gfx, &real_mem, &real_gfx);
+    if (before_mem == target_mem && before_gfx == target_gfx) {
+        hw_current_clocks(&real_mem, &real_gfx);
+    } else {
+        read_clocks_stable(before_mem, before_gfx, &real_mem, &real_gfx);
+    }
 
     /* 7. Print clean summary */
     int temp = hw_gpu_temp();
@@ -289,8 +295,8 @@ static int apply_profile(int mem_pct, int gfx_pct, const char *mode_str,
  */
 static int apply_clock(int req_mem, int req_gfx, uid_t real_uid)
 {
-    int before_mem = hw_current_mem_clock();
-    int before_gfx = hw_current_graphics_clock();
+    int before_mem, before_gfx;
+    hw_current_clocks(&before_mem, &before_gfx);
 
     hw_enable_persistence();
 
@@ -304,7 +310,11 @@ static int apply_clock(int req_mem, int req_gfx, uid_t real_uid)
     }
 
     int real_mem = -1, real_gfx = -1;
-    read_clocks_stable(before_mem, before_gfx, &real_mem, &real_gfx);
+    if (before_mem == req_mem && before_gfx == req_gfx) {
+        hw_current_clocks(&real_mem, &real_gfx);
+    } else {
+        read_clocks_stable(before_mem, before_gfx, &real_mem, &real_gfx);
+    }
 
     int temp = hw_gpu_temp();
     print_profile_result("Custom Clock",
@@ -393,8 +403,8 @@ static int cmd_status(uid_t real_uid)
     nvflux_state_t st;
     int have_state = (state_read(real_uid, &st) == 0);
 
-    int live_mem  = hw_current_mem_clock();
-    int live_gfx  = hw_current_graphics_clock();
+    int live_mem, live_gfx;
+    hw_current_clocks(&live_mem, &live_gfx);
     int live_temp = hw_gpu_temp();
 
     printf("─────────────────────────────\n");
