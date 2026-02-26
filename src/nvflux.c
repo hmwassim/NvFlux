@@ -234,13 +234,22 @@ static int reset_memory_clocks(void) {
     return run_nvsmicmd(try2);
 }
 
-/* get supported graphics clocks */
-static int get_graphics_clocks(int *clocks, int max) {
+/* get supported graphics clocks valid for a given memory clock */
+static int get_graphics_clocks(int memclk, int *clocks, int max) {
     char out[READ_BUF];
-    char *argv[] = { nvsmipath, "--query-supported-clocks=graphics", "--format=csv,noheader,nounits", NULL };
+    char memarg[64];
+    snprintf(memarg, sizeof(memarg), "--mem-clock=%d", memclk);
+    char *argv[] = { nvsmipath, "--query-supported-clocks=graphics", memarg, "--format=csv,noheader,nounits", NULL };
     int rc = exec_capture(argv, out, sizeof(out));
     if (rc < 0) return -1;
-    return nvflux_parse_clocks(out, clocks, max);
+    int count = nvflux_parse_clocks(out, clocks, max);
+    /* fallback: if query with --mem-clock is unsupported by this driver version, retry without it */
+    if (count <= 0) {
+        char *fallback[] = { nvsmipath, "--query-supported-clocks=graphics", "--format=csv,noheader,nounits", NULL };
+        if (exec_capture(fallback, out, sizeof(out)) >= 0)
+            count = nvflux_parse_clocks(out, clocks, max);
+    }
+    return count;
 }
 
 /* get current graphics clock */
@@ -409,18 +418,14 @@ int nvflux_run(int argc, char **argv) {
     int mem_count = get_mem_clocks(mem_clocks, MAX_CLOCKS);
     if (mem_count <= 0) { fprintf(stderr, "Failed to query supported memory clocks\n"); return 1; }
 
-    int gfx_clocks[MAX_CLOCKS];
-    int gfx_count = get_graphics_clocks(gfx_clocks, MAX_CLOCKS);
-
     int mem_max = mem_clocks[0];
     int mem_mid = mem_clocks[mem_count / 2];
     int mem_low = mem_clocks[mem_count - 1];
 
-    int gfx_max = gfx_count > 0 ? gfx_clocks[0] : -1;
-    int gfx_mid = gfx_count > 0 ? gfx_clocks[gfx_count / 2] : -1;
-    int gfx_low = gfx_count > 0 ? gfx_clocks[gfx_count - 1] : -1;
-
     if (strcmp(cmd, "performance") == 0) {
+        int gfx_clocks[MAX_CLOCKS];
+        int gfx_count = get_graphics_clocks(mem_max, gfx_clocks, MAX_CLOCKS);
+        int gfx_max = gfx_count > 0 ? gfx_clocks[0] : -1;
         if (apply_profile(mem_max, gfx_max) != 0) return 1;
         printf("Performance: memory %d MHz", mem_max);
         if (gfx_max > 0) printf(", graphics %d MHz", gfx_max);
@@ -428,6 +433,9 @@ int nvflux_run(int argc, char **argv) {
         write_state(real_uid, "performance");
         return 0;
     } else if (strcmp(cmd, "balanced") == 0) {
+        int gfx_clocks[MAX_CLOCKS];
+        int gfx_count = get_graphics_clocks(mem_mid, gfx_clocks, MAX_CLOCKS);
+        int gfx_mid = gfx_count > 0 ? gfx_clocks[gfx_count / 2] : -1;
         if (apply_profile(mem_mid, gfx_mid) != 0) return 1;
         printf("Balanced: memory %d MHz", mem_mid);
         if (gfx_mid > 0) printf(", graphics %d MHz", gfx_mid);
@@ -435,6 +443,9 @@ int nvflux_run(int argc, char **argv) {
         write_state(real_uid, "balanced");
         return 0;
     } else if (strcmp(cmd, "powersaver") == 0) {
+        int gfx_clocks[MAX_CLOCKS];
+        int gfx_count = get_graphics_clocks(mem_low, gfx_clocks, MAX_CLOCKS);
+        int gfx_low = gfx_count > 0 ? gfx_clocks[gfx_count - 1] : -1;
         if (apply_profile(mem_low, gfx_low) != 0) return 1;
         printf("Power Saver: memory %d MHz", mem_low);
         if (gfx_low > 0) printf(", graphics %d MHz", gfx_low);
