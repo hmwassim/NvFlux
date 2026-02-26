@@ -318,14 +318,23 @@ static int get_gpu_temp(void) {
     return (int)strtol(p, NULL, 10);
 }
 
-/* Poll until two consecutive clock reads agree (driver has settled) or timeout.
- * Returns the stabilised mem and gfx clocks via out-params. */
-static void read_clocks_stable(int *out_mem, int *out_gfx) {
+/* Poll until clocks change away from (before_mem, before_gfx) AND two
+ * consecutive reads agree, meaning the driver has fully applied the new lock.
+ * Falls back to whatever was last read if the timeout expires. */
+static void read_clocks_stable(int before_mem, int before_gfx, int *out_mem, int *out_gfx) {
     int prev_mem = -1, prev_gfx = -1;
     int elapsed = 0;
     while (elapsed < READBACK_TIMEOUT_MS) {
+        usleep(READBACK_POLL_MS * 1000);
+        elapsed += READBACK_POLL_MS;
         int mem = get_current_mem_clock();
         int gfx = get_current_graphics_clock();
+        /* Wait until the values have moved away from the pre-lock snapshot */
+        if (mem == before_mem && gfx == before_gfx) {
+            prev_mem = mem; prev_gfx = gfx;
+            continue;
+        }
+        /* Then wait for two identical reads in a row (settled) */
         if (mem == prev_mem && gfx == prev_gfx && mem > 0) {
             *out_mem = mem;
             *out_gfx = gfx;
@@ -333,12 +342,10 @@ static void read_clocks_stable(int *out_mem, int *out_gfx) {
         }
         prev_mem = mem;
         prev_gfx = gfx;
-        usleep(READBACK_POLL_MS * 1000);
-        elapsed += READBACK_POLL_MS;
     }
     /* timeout: return whatever we last read */
-    *out_mem = prev_mem;
-    *out_gfx = prev_gfx;
+    *out_mem = prev_mem > 0 ? prev_mem : before_mem;
+    *out_gfx = prev_gfx > 0 ? prev_gfx : before_gfx;
 }
 
 /* Check GPU temperature and refuse or warn before applying a profile.
@@ -520,9 +527,11 @@ int nvflux_run(int argc, char **argv) {
     if (strcmp(cmd, "performance") == 0) {
         if (check_temp_safety(1) != 0) return 1;
         int gfx = pick_clock_at_pct(gfx_clocks, gfx_count, GFX_PCT_PERFORMANCE);
+        int before_mem = get_current_mem_clock();
+        int before_gfx = get_current_graphics_clock();
         if (apply_profile(mem_max, gfx) != 0) return 1;
         int real_mem, real_gfx;
-        read_clocks_stable(&real_mem, &real_gfx);
+        read_clocks_stable(before_mem, before_gfx, &real_mem, &real_gfx);
         printf("Performance: memory %d MHz, graphics %d MHz\n",
                real_mem > 0 ? real_mem : mem_max,
                real_gfx > 0 ? real_gfx : gfx);
@@ -531,9 +540,11 @@ int nvflux_run(int argc, char **argv) {
     } else if (strcmp(cmd, "balanced") == 0) {
         if (check_temp_safety(1) != 0) return 1;
         int gfx = pick_clock_at_pct(gfx_clocks, gfx_count, GFX_PCT_BALANCED);
+        int before_mem = get_current_mem_clock();
+        int before_gfx = get_current_graphics_clock();
         if (apply_profile(mem_mid, gfx) != 0) return 1;
         int real_mem, real_gfx;
-        read_clocks_stable(&real_mem, &real_gfx);
+        read_clocks_stable(before_mem, before_gfx, &real_mem, &real_gfx);
         printf("Balanced: memory %d MHz, graphics %d MHz\n",
                real_mem > 0 ? real_mem : mem_mid,
                real_gfx > 0 ? real_gfx : gfx);
@@ -542,9 +553,11 @@ int nvflux_run(int argc, char **argv) {
     } else if (strcmp(cmd, "powersaver") == 0) {
         if (check_temp_safety(0) != 0) return 1;
         int gfx = pick_clock_at_pct(gfx_clocks, gfx_count, GFX_PCT_POWERSAVER);
+        int before_mem = get_current_mem_clock();
+        int before_gfx = get_current_graphics_clock();
         if (apply_profile(mem_low, gfx) != 0) return 1;
         int real_mem, real_gfx;
-        read_clocks_stable(&real_mem, &real_gfx);
+        read_clocks_stable(before_mem, before_gfx, &real_mem, &real_gfx);
         printf("Power Saver: memory %d MHz, graphics %d MHz\n",
                real_mem > 0 ? real_mem : mem_low,
                real_gfx > 0 ? real_gfx : gfx);
