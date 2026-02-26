@@ -288,6 +288,32 @@ static int get_graphics_clocks(int *clocks, int max) {
     return nvflux_parse_clocks(out, clocks, max);
 }
 
+/* Query the actual maximum lockable (non-boost) graphics clock.
+ * --query-supported-clocks includes boost clocks that --lock-gpu-clocks cannot
+ * honor; clocks.max.gr returns the real ceiling the driver will enforce.
+ * Returns -1 if the query fails (caller should skip filtering in that case). */
+static int get_max_lockable_gfx_clock(void) {
+    char out[READ_BUF];
+    char *q[] = { nvsmipath, "--query-gpu=clocks.max.gr", "--format=csv,noheader,nounits", NULL };
+    if (exec_capture(q, out, sizeof(out), 0) < 0) return -1;
+    const char *p = out;
+    while (*p && (*p < '0' || *p > '9')) p++;
+    if (!*p) return -1;
+    return (int)strtol(p, NULL, 10);
+}
+
+/* Remove boost clocks from a sorted-descending deduplicated array in-place.
+ * Any value above max_lockable is a boost clock the driver won't actually lock
+ * to; strip them so percentile selection operates only on real lock targets. */
+static int filter_lockable_clocks(int *clocks, int count, int max_lockable) {
+    if (max_lockable <= 0) return count; /* query failed; keep all */
+    int out = 0;
+    for (int i = 0; i < count; ++i)
+        if (clocks[i] <= max_lockable)
+            clocks[out++] = clocks[i];
+    return out;
+}
+
 /* get current graphics clock */
 static int get_current_graphics_clock(void) {
     char out[READ_BUF];
@@ -383,6 +409,21 @@ static int reset_graphics_clocks(void) {
     /* fallback: some drivers use broader reset */
     char *try2[] = { nvsmipath, "--reset-clocks", NULL };
     return run_nvsmicmd(try2);
+}
+
+/* Print the profile result line.  Shows what was requested and what the driver
+ * actually applied; adds a note if the driver adjusted either value. */
+static void print_profile_result(const char *label,
+                                  int req_mem,  int req_gfx,
+                                  int real_mem, int real_gfx) {
+    int mem = real_mem > 0 ? real_mem : req_mem;
+    int gfx = real_gfx > 0 ? real_gfx : req_gfx;
+    printf("%s: memory %d MHz, graphics %d MHz", label, mem, gfx);
+    if (real_mem > 0 && real_mem != req_mem)
+        printf(" (memory requested %d MHz, driver applied %d MHz)", req_mem, real_mem);
+    if (real_gfx > 0 && real_gfx != req_gfx)
+        printf(" (graphics requested %d MHz, driver applied %d MHz)", req_gfx, real_gfx);
+    printf("\n");
 }
 
 /* apply a profile: enable persistence, lock memory and graphics clocks */
@@ -520,9 +561,12 @@ int nvflux_run(int argc, char **argv) {
     int mem_low = mem_clocks[mem_count - 1];
 
     /* Query graphics clocks once (sorted descending, deduplicated).
-     * Pick by percentile from the high end using the named constants above. */
+     * Strip boost clocks the driver cannot actually lock to, then
+     * pick by percentile from the high end using the named constants above. */
     int gfx_clocks[MAX_CLOCKS];
     int gfx_count = get_graphics_clocks(gfx_clocks, MAX_CLOCKS);
+    int max_lockable_gfx = get_max_lockable_gfx_clock();
+    gfx_count = filter_lockable_clocks(gfx_clocks, gfx_count, max_lockable_gfx);
 
     if (strcmp(cmd, "performance") == 0) {
         if (check_temp_safety(1) != 0) return 1;
@@ -532,9 +576,7 @@ int nvflux_run(int argc, char **argv) {
         if (apply_profile(mem_max, gfx) != 0) return 1;
         int real_mem, real_gfx;
         read_clocks_stable(before_mem, before_gfx, &real_mem, &real_gfx);
-        printf("Performance: memory %d MHz, graphics %d MHz\n",
-               real_mem > 0 ? real_mem : mem_max,
-               real_gfx > 0 ? real_gfx : gfx);
+        print_profile_result("Performance", mem_max, gfx, real_mem, real_gfx);
         write_state(real_uid, "performance");
         return 0;
     } else if (strcmp(cmd, "balanced") == 0) {
@@ -545,9 +587,7 @@ int nvflux_run(int argc, char **argv) {
         if (apply_profile(mem_mid, gfx) != 0) return 1;
         int real_mem, real_gfx;
         read_clocks_stable(before_mem, before_gfx, &real_mem, &real_gfx);
-        printf("Balanced: memory %d MHz, graphics %d MHz\n",
-               real_mem > 0 ? real_mem : mem_mid,
-               real_gfx > 0 ? real_gfx : gfx);
+        print_profile_result("Balanced", mem_mid, gfx, real_mem, real_gfx);
         write_state(real_uid, "balanced");
         return 0;
     } else if (strcmp(cmd, "powersaver") == 0) {
@@ -558,9 +598,7 @@ int nvflux_run(int argc, char **argv) {
         if (apply_profile(mem_low, gfx) != 0) return 1;
         int real_mem, real_gfx;
         read_clocks_stable(before_mem, before_gfx, &real_mem, &real_gfx);
-        printf("Power Saver: memory %d MHz, graphics %d MHz\n",
-               real_mem > 0 ? real_mem : mem_low,
-               real_gfx > 0 ? real_gfx : gfx);
+        print_profile_result("Power Saver", mem_low, gfx, real_mem, real_gfx);
         write_state(real_uid, "powersaver");
         return 0;
     } else if (strcmp(cmd, "auto") == 0 || strcmp(cmd, "reset") == 0) {
