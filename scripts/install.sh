@@ -1,115 +1,106 @@
 #!/bin/sh
-# install.sh — build and install nvflux
+# NvFlux installer: build, install setuid root, install man page.
 set -e
 
-OUT=/usr/local/bin/nvflux
-MANDIR=/usr/local/share/man/man1
-MAN_SRC=man/nvflux.1
+INSTALL_BIN=/usr/local/bin/nvflux
+MAN_DIR=/usr/local/share/man/man1
 
-if [ "$(id -u)" -ne 0 ]; then
-    echo "This installer must be run as root (use sudo)." >&2
-    exit 1
-fi
+[ "$(id -u)" -eq 0 ] || { echo "Run as root:  sudo $0" >&2; exit 1; }
 
-# ── dependency check ─────────────────────────────────────────────────
-echo "Checking build dependencies..."
+./scripts/check-deps.sh || true  # advisory only
 
-missing=""
-need() { command -v "$1" >/dev/null 2>&1 || missing="$missing $1"; }
-
-need cmake
-need gcc
-need make
-need nvidia-smi
-
-if [ -n "$missing" ]; then
-    echo "Warning: missing tools:$missing"
-
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        dist="${ID_LIKE:-$ID}"
-    else
-        dist=""
-    fi
-
-    echo "Install suggestion:"
-    case "$dist" in
-        *debian*|*ubuntu*|debian|ubuntu)
-            echo "  sudo apt update && sudo apt install build-essential cmake gzip"
-            echo "  # NVIDIA: sudo apt install nvidia-utils"
-            ;;
-        *arch*|arch)
-            echo "  sudo pacman -Syu base-devel cmake gzip nvidia-utils"
-            ;;
-        *fedora*|*rhel*|*centos*|fedora|rhel|centos)
-            echo "  sudo dnf install @development-tools cmake gzip"
-            echo "  # NVIDIA: install via RPM Fusion — https://rpmfusion.org"
-            ;;
-        *suse*|suse|opensuse*)
-            echo "  sudo zypper install -t pattern devel_C_C++ cmake gzip"
-            ;;
-        *void*|void)
-            echo "  sudo xbps-install -S base-devel cmake gzip nvidia-utils"
-            ;;
-        solus)
-            echo "  sudo eopkg it -c system.devel"
-            ;;
-        *)
-            echo "  Install a C compiler, cmake, make, gzip, and the NVIDIA driver utilities."
-            ;;
-    esac
-    echo "Continuing; build may fail if critical tools are absent."
-fi
-
-# ── build ─────────────────────────────────────────────────────────────
 echo "Building nvflux..."
 
 if command -v cmake >/dev/null 2>&1 && [ -f CMakeLists.txt ]; then
-    rm -rf build
-    mkdir -p build
-    cd build
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DCMAKE_C_COMPILER=gcc --log-level=WARNING 2>&1 | sed '/^--/d'
-    make -j"$(nproc 2>/dev/null || echo 1)" VERBOSE=0 2>&1 | sed '/^\[.*[0-9]%\]/d'
-    BUILT_BIN="$(pwd)/nvflux"
-    cd ..
+    cmake -S . -B _build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -Wno-dev
+    cmake --build _build --parallel "$(nproc 2>/dev/null || echo 1)"
+    BINARY=_build/nvflux
+elif command -v gcc >/dev/null 2>&1; then
+    gcc -O2 -Wall -I include -I src \
+        -o _nvflux_tmp \
+        src/main.c src/nvflux.c src/gpu.c src/state.c src/exec.c
+    BINARY=_nvflux_tmp
 else
-    if ! command -v gcc >/dev/null 2>&1; then
-        echo "gcc not found — install a C compiler and rerun." >&2
-        exit 1
-    fi
-    gcc -O2 -Wall -Iinclude -o nvflux \
-        src/main.c src/nvflux.c src/hw.c src/state.c
-    BUILT_BIN="$(pwd)/nvflux"
+    echo "Error: install cmake+make or gcc and retry." >&2; exit 1
 fi
 
-if [ ! -x "$BUILT_BIN" ]; then
-    echo "Build failed: binary not found at $BUILT_BIN" >&2
-    exit 1
-fi
+[ -x "$BINARY" ] || { echo "Build failed: no executable produced." >&2; exit 1; }
 
-# ── install ───────────────────────────────────────────────────────────
-echo "Installing $BUILT_BIN -> $OUT"
-install -Dm755 "$BUILT_BIN" "$OUT"
-chown root:root "$OUT"
-chmod 4755 "$OUT"
+install -Dm755 "$BINARY" "$INSTALL_BIN"
+chown root:root "$INSTALL_BIN"
+chmod 4755      "$INSTALL_BIN"
+echo "Installed $INSTALL_BIN (setuid root)"
 
-if [ -f "$MAN_SRC" ]; then
-    mkdir -p "$MANDIR"
-    gzip -c "$MAN_SRC" > "$MANDIR/nvflux.1.gz"
-    echo "Installed man page -> $MANDIR/nvflux.1.gz"
+if [ -f man/nvflux.1 ]; then
+    mkdir -p "$MAN_DIR"
+    gzip -c man/nvflux.1 > "$MAN_DIR/nvflux.1.gz"
     command -v mandb >/dev/null 2>&1 && mandb >/dev/null 2>&1 || true
+    echo "Installed man page $MAN_DIR/nvflux.1.gz"
 fi
 
-# ── state dir ─────────────────────────────────────────────────────────
-user="${SUDO_USER:-$(logname 2>/dev/null || whoami)}"
-home_dir="$(eval echo "~$user")"
-state_dir="$home_dir/.local/state/nvflux"
-mkdir -p "$state_dir"
-chown -R "$user":"$user" "$home_dir/.local" 2>/dev/null || true
+# ── Shell completions ─────────────────────────────────────────────────────────
 
-# ── done ─────────────────────────────────────────────────────────────
-echo "─────────────────────────────"
-echo "nvflux installed successfully"
-echo "  Binary:  $OUT"
-echo "  Running: nvflux --help"
-echo "─────────────────────────────"
+# bash
+if [ -f completions/bash/nvflux ]; then
+    if command -v pkg-config >/dev/null 2>&1; then
+        BASH_COMP_DIR=$(pkg-config --variable=completionsdir bash-completion 2>/dev/null)
+    fi
+    : "${BASH_COMP_DIR:=/usr/share/bash-completion/completions}"
+    [ -d /etc/bash_completion.d ] && [ ! -d "$BASH_COMP_DIR" ] && \
+        BASH_COMP_DIR=/etc/bash_completion.d
+    mkdir -p "$BASH_COMP_DIR"
+    install -Dm644 completions/bash/nvflux "$BASH_COMP_DIR/nvflux"
+    echo "Installed bash completion $BASH_COMP_DIR/nvflux"
+fi
+
+# zsh
+if [ -f completions/zsh/_nvflux ]; then
+    # Try common site-functions directories in order of preference
+    for d in /usr/share/zsh/site-functions \
+              /usr/local/share/zsh/site-functions \
+              /usr/share/zsh/vendor-completions; do
+        if [ -d "$d" ]; then
+            ZSH_COMP_DIR="$d"
+            break
+        fi
+    done
+    # If zsh is installed but none of the dirs exist yet, use the first standard path
+    if [ -z "$ZSH_COMP_DIR" ] && command -v zsh >/dev/null 2>&1; then
+        ZSH_COMP_DIR=/usr/share/zsh/site-functions
+    fi
+    if [ -n "$ZSH_COMP_DIR" ]; then
+        mkdir -p "$ZSH_COMP_DIR"
+        install -Dm644 completions/zsh/_nvflux "$ZSH_COMP_DIR/_nvflux"
+        echo "Installed zsh completion $ZSH_COMP_DIR/_nvflux"
+    fi
+fi
+
+# fish
+if [ -f completions/fish/nvflux.fish ]; then
+    for d in /usr/share/fish/vendor_completions.d \
+              /usr/share/fish/completions; do
+        if [ -d "$d" ]; then
+            FISH_COMP_DIR="$d"
+            break
+        fi
+    done
+    if [ -z "$FISH_COMP_DIR" ] && command -v fish >/dev/null 2>&1; then
+        FISH_COMP_DIR=/usr/share/fish/vendor_completions.d
+    fi
+    if [ -n "$FISH_COMP_DIR" ]; then
+        mkdir -p "$FISH_COMP_DIR"
+        install -Dm644 completions/fish/nvflux.fish "$FISH_COMP_DIR/nvflux.fish"
+        echo "Installed fish completion $FISH_COMP_DIR/nvflux.fish"
+    fi
+fi
+
+# Create state directory owned by the invoking (non-root) user
+USER=${SUDO_USER:-$(logname 2>/dev/null || whoami)}
+HOME_DIR=$(eval echo "~$USER")
+STATE_DIR="$HOME_DIR/.local/state/nvflux"
+mkdir -p "$STATE_DIR"
+chown "$USER:$USER" "$STATE_DIR" 2>/dev/null || true
+echo "State directory: $STATE_DIR"
+
+rm -rf _build _nvflux_tmp 2>/dev/null || true
+echo "Done.  Try: nvflux --help"

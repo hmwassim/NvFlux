@@ -1,37 +1,28 @@
 #!/bin/sh
 set -e
 
-if [ "$(id -u)" -ne 0 ]; then
-    echo "This uninstaller must be run as root (use sudo)." >&2
-    exit 1
-fi
+[ "$(id -u)" -eq 0 ] || { echo "Run as root:  sudo $0" >&2; exit 1; }
 
-OUT=/usr/local/bin/nvflux
-MANDIR=/usr/local/share/man/man1
-MAN_PAGE="$MANDIR/nvflux.1.gz"
+for f in /usr/local/bin/nvflux /usr/local/share/man/man1/nvflux.1.gz; do
+    [ -e "$f" ] && { rm -f "$f"; echo "Removed $f"; }
+done
 
-if [ -f "$OUT" ]; then
-    echo "Removing $OUT"
-    rm -f "$OUT"
-else
-    echo "nvflux binary not found at $OUT"
-fi
+command -v mandb >/dev/null 2>&1 && mandb >/dev/null 2>&1 || true
 
-if [ -f "$MAN_PAGE" ]; then
-    echo "Removing man page $MAN_PAGE"
-    rm -f "$MAN_PAGE"
-    if command -v mandb >/dev/null 2>&1; then
-        mandb >/dev/null 2>&1 || true
-    fi
-fi
+# Remove shell completions from all standard locations
+for f in \
+    /usr/share/bash-completion/completions/nvflux \
+    /etc/bash_completion.d/nvflux \
+    /usr/share/zsh/site-functions/_nvflux \
+    /usr/local/share/zsh/site-functions/_nvflux \
+    /usr/share/zsh/vendor-completions/_nvflux \
+    /usr/share/fish/vendor_completions.d/nvflux.fish \
+    /usr/share/fish/completions/nvflux.fish; do
+    [ -e "$f" ] && { rm -f "$f"; echo "Removed $f"; }
+done
 
-# Remove installer user's state dir
-user=${SUDO_USER:-$(logname 2>/dev/null || whoami)}
-home_dir=$(eval echo "~$user")
-state_dir="$home_dir/.local/state/nvflux"
-if [ -d "$state_dir" ]; then
-    echo "Removing user state dir $state_dir"
-    rm -rf "$state_dir"
-fi
+USER=${SUDO_USER:-$(logname 2>/dev/null || whoami)}
+STATE_DIR="$(eval echo "~$USER")/.local/state/nvflux"
+[ -d "$STATE_DIR" ] && { rm -rf "$STATE_DIR"; echo "Removed $STATE_DIR"; }
 
 echo "Uninstall complete."

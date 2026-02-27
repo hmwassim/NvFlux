@@ -1,68 +1,23 @@
 #!/bin/sh
-# check-deps.sh — verify build and runtime dependencies for nvflux
+REQUIRED="gcc cmake make nvidia-smi gzip"
+ok=1; missing=""
 
-PASS="[ok]"
-FAIL="[missing]"
-
-echo "nvflux dependency check"
-echo "─────────────────────────────"
-
-need="cmake gcc make gzip nvidia-smi"
-missing=""
-for cmd in $need; do
-    if command -v "$cmd" >/dev/null 2>&1; then
-        echo "  $PASS  $cmd"
-    else
-        echo "  $FAIL $cmd"
-        missing="$missing $cmd"
-    fi
+for cmd in $REQUIRED; do
+    command -v "$cmd" >/dev/null 2>&1 || { missing="$missing $cmd"; ok=0; }
 done
 
-echo "─────────────────────────────"
-
-if [ -z "$missing" ]; then
-    echo "All dependencies present."
-    exit 0
-fi
+[ "$ok" -eq 1 ] && { echo "All required dependencies found."; exit 0; }
 
 echo "Missing:$missing"
-echo ""
-
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    dist="${ID_LIKE:-$ID}"
-else
-    dist=""
-fi
-
-echo "Install suggestion for your distro:"
-case "$dist" in
-    *debian*|*ubuntu*|debian|ubuntu)
-        echo "  sudo apt update && sudo apt install build-essential cmake gzip"
-        echo "  # NVIDIA: sudo apt install nvidia-utils  (or nvidia-cuda-toolkit)"
-        ;;
-    *arch*|arch)
-        echo "  sudo pacman -Syu base-devel cmake gzip nvidia-utils"
-        ;;
-    *fedora*|*rhel*|*centos*|fedora|rhel|centos)
-        echo "  sudo dnf install @development-tools cmake gzip"
-        echo "  # NVIDIA: install via RPM Fusion — https://rpmfusion.org"
-        ;;
-    *suse*|suse|opensuse*)
-        echo "  sudo zypper install -t pattern devel_C_C++ cmake gzip"
-        echo "  # NVIDIA: sudo zypper install nvidia-driver"
-        ;;
-    *void*|void)
-        echo "  sudo xbps-install -S base-devel cmake gzip nvidia-utils"
-        ;;
-    solus)
-        echo "  sudo eopkg it -c system.devel"
-        echo "  # NVIDIA driver is included in Solus; ensure it is activated"
-        ;;
-    *)
-        echo "  Install a C compiler, cmake, make, gzip, and the NVIDIA driver"
-        echo "  utilities (provides nvidia-smi) for your distribution."
-        ;;
+distro=""
+[ -f /etc/os-release ] && { . /etc/os-release; distro="${ID_LIKE:-$ID}"; }
+echo "Install suggestions:"
+case "$distro" in
+    *debian*|*ubuntu*|debian|ubuntu) echo "  sudo apt install build-essential cmake gzip nvidia-utils" ;;
+    *arch*|arch)                     echo "  sudo pacman -Syu base-devel cmake gzip nvidia-utils" ;;
+    *rhel*|*fedora*|fedora)          echo "  sudo dnf install @development-tools cmake gzip  # NVIDIA: RPM Fusion" ;;
+    *suse*|suse)                     echo "  sudo zypper install -t pattern devel_C_C++ cmake gzip" ;;
+    *void*|void)                     echo "  sudo xbps-install -S base-devel cmake gzip nvidia-utils" ;;
+    *)                               echo "  Install a C compiler, cmake/make, gzip, and NVIDIA driver utilities." ;;
 esac
-
 exit 2

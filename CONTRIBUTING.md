@@ -1,16 +1,8 @@
-# Contributing to nvflux
+# Contributing
 
-Guidelines:
-- Keep privileged code minimal and well-audited.
-- Prefer small, focused commits and explain reasoning in commit messages.
-- Add unit tests for parsing / pure logic. Tests should not require root.
-- Use the provided CMake targets. Run tests with `ctest` from build directory.
-- For packaging (deb/rpm/flatpak) leave setuid behavior to package scripts; installers can call scripts/install.sh.
-
-Code style:
-- Keep C idiomatic and portable. Avoid non-standard extensions unless necessary.
-- Document edge cases and security rationale in code comments.
-
-Submitting patches:
-- Open an issue describing the change if non-trivial.
-- Provide reproducer and test in `tests/` for logic changes.
+- Keep privileged code minimal and auditable.
+- Add a unit test in `tests/test_nvflux.c` for every logic change; tests must not require root or a GPU.
+- Run `ctest` from the build directory before submitting.
+- C99, no non-standard extensions.
+- Document security rationale for any change touching privilege paths or subprocess execution.
+- Each source module (gpu, state, exec) should remain independently testable.

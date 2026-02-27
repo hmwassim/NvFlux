@@ -1,0 +1,27 @@
+#compdef nvflux
+# zsh completion for nvflux
+# Install to:
+#   /usr/share/zsh/site-functions/_nvflux   (system-wide)
+#   ${fpath[1]}/_nvflux                     (user — add a dir to fpath first)
+
+_nvflux() {
+    local -a commands
+
+    commands=(
+        'performance:Lock memory clock to the highest supported tier'
+        'balanced:Lock memory clock to the mid-range tier'
+        'powersave:Lock memory clock to the lowest supported tier'
+        'auto:Unlock memory clocks (let the driver manage frequency)'
+        'status:Show the current lock state and last saved profile'
+        '--restore:Re-apply the last saved profile'
+        '--version:Print version and exit'
+        '--help:Print usage information and exit'
+    )
+
+    # Only complete the first positional word
+    if (( CURRENT == 2 )); then
+        _describe 'nvflux command' commands
+    fi
+}
+
+_nvflux "$@"

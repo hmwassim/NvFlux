@@ -1,199 +1,117 @@
 # NvFlux
 
-A minimal, secure setuid-root helper for unprivileged NVIDIA GPU profile management.
+A minimal, setuid-root helper for NVIDIA GPU memory clock locking on Linux.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-red.svg)](LICENSE)
 
 ## Overview
 
-nvflux allows desktop users to switch NVIDIA GPU power profiles without `sudo` by providing a carefully constrained interface to `nvidia-smi` operations. It's designed for:
+`nvflux` lets desktop users switch NVIDIA GPU profiles without `sudo` by locking memory clocks via `nvidia-smi`. Clock tiers are queried live from the driver — nothing is hard-coded, so it works on any NVIDIA GPU.
 
-- **Desktop Linux users** who want convenient GPU profile switching
-- **Laptop users** needing battery vs performance trade-offs
-- **Multi-boot systems** where persistence settings need per-session control
-
-**Key Features:**
-- ✅ Memory & graphics clock (PowerMizer) control per profile
-- ✅ No security risk (allowlist-only commands)
-- ✅ No shell invocation (direct exec calls)
-- ✅ Per-user state persistence
-- ✅ Distro-agnostic (no systemd/compositor dependencies)
-- ✅ Well-tested with unit tests
+| Profile     | Memory clock                       |
+|-------------|------------------------------------|
+| performance | Locked to highest supported tier   |
+| balanced    | Locked to mid-range supported tier |
+| powersave   | Locked to lowest supported tier    |
+| auto        | Unlocked (driver managed)          |
 
 ## Quick Start
 
-```bash
-# 1. Check dependencies
-./scripts/check-deps.sh
+```sh
+./scripts/check-deps.sh     # check build dependencies
+sudo ./scripts/install.sh   # build, install, set setuid bit
 
-# 2. Install (requires root)
-sudo ./scripts/install.sh
-
-# 3. Use it
-nvflux performance   # Max performance
-nvflux balanced      # Balanced mode
-nvflux powersave     # Power saving
-nvflux reset         # Auto (driver managed)
-nvflux status        # Show current profile and live clocks
-```
-
-## Documentation
-
-- **[Installation Guide](docs/INSTALLATION.md)** - Detailed setup per distro
-- **[Security Model](docs/SECURITY.md)** - How nvflux stays safe
-- **[Contributing](CONTRIBUTING.md)** - Development guidelines
-
-## Usage Examples
-
-### Basic Commands
-
-```bash
-# Switch profiles
-nvflux performance
-nvflux balanced
-nvflux powersave
-
-# Reset to automatic
-nvflux auto         # or: nvflux reset
-
-# Query status
-nvflux status             # Profile, applied time, clocks, temp
-nvflux clock <mem> <gfx>  # Lock to specific MHz values
-
-# Restore on boot
-nvflux --restore    # Apply saved profile
-
-# Help
-nvflux --help
-nvflux --version
-man nvflux
-```
-
-### Integration Examples
-
-See [examples/](examples/) for:
-- [profile-switcher.sh](examples/profile-switcher.sh) - Interactive menu
-- [rofi-launcher.sh](examples/rofi-launcher.sh) - GUI launcher for i3/Sway
-
-### Autostart Setup
-
-**i3/Sway** (`~/.config/i3/config`):
-```
-exec --no-startup-id nvflux --restore
-```
-
-**systemd user service** - see [docs/INSTALLATION.md](docs/INSTALLATION.md#autostart-configuration)
-
-## Architecture
-
-```
-nvflux (setuid root)
-├── src/main.c          # Entry point, version flag
-├── src/nvflux.c        # Profile logic, public API (nvflux_run, nvflux_parse_clocks)
-├── src/hw.c            # All nvidia-smi interaction (queries, locks, temp)
-├── src/state.c         # State file read/write (~/.local/state/nvflux/state)
-├── include/nvflux.h    # Public API declarations
-├── include/hw.h        # Hardware layer API
-├── include/state.h     # State struct and API
-└── tests/test_nvflux.c # Unit tests (no root required)
-```
-
-**Security Model:**
-- Validates all commands against allowlist
-- No arbitrary string injection into nvidia-smi
-- Clock values are queried from GPU; only `clock <mem> <gfx>` accepts user values (clamped to driver ceiling)
-- State files owned by real UID, not root
-- See [docs/SECURITY.md](docs/SECURITY.md) for full analysis
-
-## Building
-
-### With CMake (Recommended)
-
-```bash
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-ctest -V  # Run tests
-```
-
-### Manual Install
-
-```bash
-# Build
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-
-# Install manually
-sudo install -Dm4755 build/nvflux /usr/local/bin/nvflux
-sudo gzip -c man/nvflux.1 > /usr/local/share/man/man1/nvflux.1.gz
+nvflux performance           # lock to max clock
+nvflux balanced              # lock to mid clock
+nvflux powersave             # lock to min clock
+nvflux auto                  # unlock
+nvflux status                # show saved profile (no root needed)
+nvflux clock                 # current mem clock in MHz
+nvflux --restore             # re-apply saved profile
 ```
 
 ## Requirements
 
-- **Runtime:** NVIDIA drivers with `nvidia-smi`
-- **Build:** C compiler (GCC/Clang), CMake 3.10+, gzip
+| Dependency   | Purpose                         |
+|--------------|---------------------------------|
+| `nvidia-smi` | Clock locking (required)        |
+| GCC / Clang  | Build (required)                |
+| CMake ≥ 3.10 | Build (preferred; gcc fallback) |
 
-| Distro | Build deps |
-|--------|------------|
-| Debian/Ubuntu | `sudo apt install build-essential cmake gzip` |
-| Arch Linux | `sudo pacman -Syu base-devel cmake gzip nvidia-utils` |
-| Fedora/RHEL | `sudo dnf install @development-tools cmake gzip` |
-| openSUSE | `sudo zypper install -t pattern devel_C_C++ cmake gzip` |
-| Void Linux | `sudo xbps-install -S base-devel cmake gzip nvidia-utils` |
-| Solus | `sudo eopkg it -c system.devel` |
+## Autostart
 
-See [docs/INSTALLATION.md](docs/INSTALLATION.md) for more detail.
-
-## Testing
-
-```bash
-cd build
-ctest -V          # Run all tests
-./test_nvflux     # Run test binary directly
+### i3 / Sway
+```
+exec --no-startup-id nvflux --restore
 ```
 
-Tests cover:
-- Clock parsing logic
-- Input validation
-- Edge cases (empty input, sorting)
+### GNOME / KDE / XFCE
+```ini
+# ~/.config/autostart/nvflux-restore.desktop
+[Desktop Entry]
+Type=Application
+Name=nvflux restore
+Exec=nvflux --restore
+```
 
-## Troubleshooting
+### systemd user service
+```ini
+# ~/.config/systemd/user/nvflux-restore.service
+[Unit]
+Description=Restore NVIDIA GPU profile
+After=graphical-session.target
 
-**"nvidia-smi not found"**
-- Install NVIDIA drivers for your distro
-- Ensure `nvidia-smi` is in PATH or `/usr/bin`
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nvflux --restore
 
-**"No devices were found"**
-- NVIDIA kernel module not loaded: `sudo modprobe nvidia`
-- Wrong driver version for your GPU
+[Install]
+WantedBy=default.target
+```
+```sh
+systemctl --user enable --now nvflux-restore.service
+```
 
-**"Permission denied" after install**
-- Check setuid bit: `ls -l /usr/local/bin/nvflux` (should show `-rwsr-xr-x`)
-- Re-run: `sudo chown root:root /usr/local/bin/nvflux && sudo chmod 4755 /usr/local/bin/nvflux`
+## Building
 
-## Uninstallation
+```sh
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
+ctest -V
+```
 
-```bash
+## Source Layout
+
+```
+src/
+  main.c      entry point + --version
+  nvflux.c    command dispatch, profile table, --restore logic
+  gpu.c       all nvidia-smi subprocess calls
+  gpu.h
+  state.c     per-user state file (read/write, recursive mkdir)
+  state.h
+  exec.c      fork/exec primitives (exec_capture, run_cmd)
+  exec.h
+include/
+  nvflux.h    public API (nvflux_run, nvflux_parse_clocks, version)
+tests/
+  test_nvflux.c  unit tests (no root / no GPU required)
+```
+
+## Security Model
+
+- Input validated against a hardcoded profile table before any action.
+- All subprocess calls use `execv` directly — no shell involvement.
+- State file owned by real UID (not root), mode 0600.
+- See [docs/SECURITY.md](docs/SECURITY.md).
+
+## Uninstall
+
+```sh
 sudo ./scripts/uninstall.sh
 ```
 
-Removes binary, man page, and user state directory.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). Contributions welcome!
-
-**Before submitting:**
-1. Add unit tests for logic changes
-2. Run `ctest` to verify
-3. Document security implications if touching privilege code
-
 ## License
 
-See [LICENSE](LICENSE) file.
-
-## See Also
-
-- [nvidia-smi documentation](https://developer.nvidia.com/nvidia-system-management-interface)
-- [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html)
+MIT — see [LICENSE](LICENSE).

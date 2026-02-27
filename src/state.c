@@ -1,176 +1,104 @@
-/*
- * state.c — NvFlux persistent state file read / write
- *
- * State is stored as a plain key=value text file at:
- *   $HOME/.local/state/nvflux/state   (normal users)
- *   /root/.local/state/nvflux/state   (root)
- *
- * Example content:
- *   mode=powersave
- *   timestamp=2026-02-26T03:15:22
- *   memory_mhz=810
- *   graphics_mhz=487
- *   temp_c=58
- */
+#include "state.h"
 
-#define _GNU_SOURCE
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
 #include <sys/stat.h>
-#include <time.h>
-#include <errno.h>
-#include <pwd.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-#include "../include/state.h"
-
-/* ------------------------------------------------------------------ */
-/*  Internal helpers                                                   */
-/* ------------------------------------------------------------------ */
+/* -----------------------------------------------------------------------
+ * Internal helpers
+ * -------------------------------------------------------------------- */
 
 /*
- * state_path — write the full path to the state file for real_uid
- * into buf (size len).  Returns 0 on success, -1 if home dir unknown.
+ * home_dir - resolve home directory for uid.
+ * Prefers getpwuid() for accuracy; falls back to $HOME (useful when
+ * called as the real user before setuid elevation, though nvflux is
+ * setuid root so getpwuid should always succeed).
+ * Returns a pointer to a static or heap string; never NULL.
  */
-static int state_path(uid_t real_uid, char *buf, size_t len)
-{
-    const char *home = NULL;
+static const char *home_dir(uid_t uid) {
+    struct passwd *pw = getpwuid(uid);
+    if (pw && pw->pw_dir && pw->pw_dir[0] != '\0')
+        return pw->pw_dir;
 
-    if (real_uid == getuid()) {
-        home = getenv("HOME");
-    }
-
-    if (!home || home[0] == '\0') {
-        struct passwd *pw = getpwuid(real_uid);
-        if (pw)
-            home = pw->pw_dir;
-    }
-
-    if (!home || home[0] == '\0')
-        return -1;
-
-    snprintf(buf, len, "%s/.local/state/nvflux/state", home);
-    return 0;
+    /* fallback: $HOME (only valid if uid == getuid()) */
+    const char *h = getenv("HOME");
+    return (h && h[0] != '\0') ? h : "/tmp";
 }
 
 /*
- * mkdirp — create all path components up to but not including the
- * last component (the filename).  Tolerates pre-existing dirs.
+ * state_path - build the full path to the state file for uid into out[].
  */
-static void mkdirp(const char *filepath)
-{
-    char tmp[512];
-    strncpy(tmp, filepath, sizeof(tmp) - 1);
-    tmp[sizeof(tmp) - 1] = '\0';
+static void state_path(uid_t uid, char *out, size_t len) {
+    snprintf(out, len, "%s/.local/state/nvflux/state", home_dir(uid));
+}
 
-    /* find last '/' — everything before is the directory */
-    char *slash = strrchr(tmp, '/');
-    if (!slash)
-        return;
-    *slash = '\0';
+/*
+ * mkdirp - recursively create every component of path with mode 0755.
+ * Ignores EEXIST at each level.  Does not restore errno.
+ */
+static void mkdirp(const char *path) {
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof(tmp), "%s", path);
 
-    /* walk and create each component */
-    for (char *p = tmp + 1; *p; p++) {
+    /* walk every '/' component and mkdir each prefix */
+    for (char *p = tmp + 1; *p; ++p) {
         if (*p == '/') {
             *p = '\0';
-            mkdir(tmp, 0755);
+            (void)mkdir(tmp, 0755);
             *p = '/';
         }
     }
-    mkdir(tmp, 0755);
+    (void)mkdir(tmp, 0755);  /* final component */
 }
 
-/* ------------------------------------------------------------------ */
-/*  Public API                                                         */
-/* ------------------------------------------------------------------ */
+/* -----------------------------------------------------------------------
+ * Public API
+ * -------------------------------------------------------------------- */
 
-int state_write(uid_t real_uid, const nvflux_state_t *s)
-{
-    char path[512];
-    if (state_path(real_uid, path, sizeof(path)) < 0) {
-        fprintf(stderr, "nvflux: cannot determine home directory for uid %d\n",
-                (int)real_uid);
-        return -1;
+void state_write(uid_t uid, const char *profile) {
+    char path[PATH_MAX];
+    state_path(uid, path, sizeof(path));
+
+    /* ensure the full directory tree exists */
+    char dir[PATH_MAX];
+    snprintf(dir, sizeof(dir), "%s", path);
+    char *slash = strrchr(dir, '/');
+    if (slash) {
+        *slash = '\0';
+        mkdirp(dir);
     }
 
-    mkdirp(path);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return;
 
-    /* Build the timestamp now */
-    char ts[32] = "";
-    time_t now = time(NULL);
-    struct tm *tm_local = localtime(&now);
-    if (tm_local)
-        strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", tm_local);
-
-    FILE *f = fopen(path, "w");
-    if (!f) {
-        fprintf(stderr, "nvflux: cannot write state file %s: %s\n",
-                path, strerror(errno));
-        return -1;
-    }
-
-    fprintf(f, "mode=%s\n",         s->mode);
-    fprintf(f, "timestamp=%s\n",    ts);
-    fprintf(f, "memory_mhz=%d\n",   s->memory_mhz);
-    fprintf(f, "graphics_mhz=%d\n", s->graphics_mhz);
-    fprintf(f, "temp_c=%d\n",       s->temp_c);
-
-    fflush(f);
-    fclose(f);
-
-    /* hand ownership back to the real user if running setuid */
-    if (real_uid != geteuid()) {
-        if (chown(path, real_uid, (gid_t)-1) < 0) {
-            /* non-fatal: ownership transfer failed, but data is written */
-            fprintf(stderr,
-                    "nvflux: warning: chown(%s, %d) failed: %s\n",
-                    path, (int)real_uid, strerror(errno));
-        }
-    }
-    return 0;
+    (void)fchown(fd, uid, (gid_t)-1);  /* ensure owned by real user */
+    (void)write(fd, profile, strlen(profile));
+    close(fd);
 }
 
-int state_read(uid_t real_uid, nvflux_state_t *s)
-{
-    char path[512];
-    if (state_path(real_uid, path, sizeof(path)) < 0)
-        return -1;
+int state_read(uid_t uid, char *buf, size_t len) {
+    char path[PATH_MAX];
+    state_path(uid, path, sizeof(path));
 
-    FILE *f = fopen(path, "r");
-    if (!f)
-        return -1;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
 
-    /* zero-initialise so partial files still produce a safe struct */
-    memset(s, 0, sizeof(*s));
+    ssize_t r = read(fd, buf, len - 1);
+    close(fd);
+    if (r <= 0) return 0;
 
-    char line[128];
-    while (fgets(line, sizeof(line), f)) {
-        /* strip trailing newline */
-        size_t l = strlen(line);
-        while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r'))
-            line[--l] = '\0';
+    buf[r] = '\0';
+    /* strip trailing whitespace (newlines written by other tools, etc.) */
+    while (r > 0 && isspace((unsigned char)buf[r - 1]))
+        buf[--r] = '\0';
 
-        char *eq = strchr(line, '=');
-        if (!eq)
-            continue;
-        *eq = '\0';
-        const char *key = line;
-        const char *val = eq + 1;
-
-        if (strcmp(key, "mode") == 0)
-            strncpy(s->mode, val, sizeof(s->mode) - 1);
-        else if (strcmp(key, "timestamp") == 0)
-            strncpy(s->timestamp, val, sizeof(s->timestamp) - 1);
-        else if (strcmp(key, "memory_mhz") == 0)
-            s->memory_mhz = atoi(val);
-        else if (strcmp(key, "graphics_mhz") == 0)
-            s->graphics_mhz = atoi(val);
-        else if (strcmp(key, "temp_c") == 0)
-            s->temp_c = atoi(val);
-    }
-
-    fclose(f);
-    return 0;
+    return (r > 0) ? 1 : 0;
 }
