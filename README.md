@@ -154,7 +154,7 @@ gcc -O2 -std=c11 -Iinclude \
 | Distro        | Command                                               |
 |---------------|-------------------------------------------------------|
 | Arch Linux    | `sudo pacman -S nvidia-utils base-devel cmake gzip`   |
-| Debian/Ubuntu | `sudo apt install nvidia-utils build-essential cmake gzip` |
+| Debian/Ubuntu | `sudo apt install build-essential cmake gzip` |
 | Fedora        | `sudo dnf install @development-tools cmake gzip`      |
 | openSUSE      | `sudo zypper install -t pattern devel_C_C++ cmake gzip` |
 | Solus         | `sudo eopkg it -c system.devel`                       |
