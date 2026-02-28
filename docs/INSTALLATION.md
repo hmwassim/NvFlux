@@ -40,32 +40,22 @@ sudo pacman -S nvidia-utils base-devel cmake gzip
 
 ### Debian / Ubuntu
 ```bash
-sudo apt install nvidia-utils build-essential cmake gzip
-```
-
-For the NVIDIA driver itself, use your distro's recommended method or:
-```bash
-sudo ubuntu-drivers install   # Ubuntu
-sudo apt install nvidia-driver # Debian
+sudo apt install build-essential cmake gzip
 ```
 
 ### Fedora
 ```bash
 sudo dnf install @development-tools cmake gzip
-# NVIDIA driver: use RPM Fusion
-sudo dnf install akmod-nvidia
 ```
 
 ### openSUSE
 ```bash
-sudo zypper install -t pattern devel_C_C++
-sudo zypper install cmake gzip
+sudo zypper install -t pattern devel_C_C++ cmake gzip
 ```
 
 ### Solus
 ```bash
 sudo eopkg it -c system.devel
-sudo eopkg it nvidia-glx-driver
 ```
 
 ### Void Linux
