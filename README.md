@@ -24,17 +24,9 @@ is momentarily disrupted and the audio stream drops out.
 ```bash
 git clone https://github.com/habibimedwassim/NvFlux.git
 cd NvFlux
-./scripts/check-deps.sh     # verify dependencies first
-sudo ./scripts/install.sh   # install once
-nvflux powersave            # lock the memory clock — no reboot needed
-nvflux --restore            # add to autostart to survive reboots
-```
-
-For a complete fix, also disable audio power saving at the kernel and audio-server level
-(handles crackling unrelated to P-state transitions):
-
-```bash
-./scripts/setup-audio.sh   # auto-detects PipeWire or PulseAudio
+./setup.sh install   # install nvflux
+nvflux powersave     # lock the memory clock
+nvflux --restore     # add to autostart to survive reboots
 ```
 
 `powersave` pins to the lowest memory tier — enough to stop P-state transitions, with
@@ -60,10 +52,10 @@ XDG-compliant state storage.
 
 `nvflux powersave` fixes dropouts caused by GPU P-state transitions. If you still hear
 crackling or intermittent dropouts, the audio server itself may be suspending idle
-devices. Run the companion script for a complete fix:
+devices. Run the companion command for a complete fix:
 
 ```bash
-./scripts/setup-audio.sh   # run as your normal user, not sudo
+./setup.sh audio
 ```
 
 What it does:
@@ -82,8 +74,7 @@ The script is idempotent — safe to run multiple times.
 ```bash
 git clone https://github.com/habibimedwassim/NvFlux.git
 cd NvFlux
-./scripts/check-deps.sh   # verify nvidia-smi, gcc, cmake are present
-sudo ./scripts/install.sh # build and install setuid-root binary
+./setup.sh install   # build and install nvflux
 ```
 
 See [docs/INSTALLATION.md](docs/INSTALLATION.md) for per-distro dependency commands and

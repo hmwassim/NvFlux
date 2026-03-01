@@ -1,31 +1,93 @@
 #!/usr/bin/env bash
 #
-# setup-audio.sh — optional low-latency audio tuning for HDMI/DP output
+# setup-audio.sh — low-latency audio tuning for HDMI/DP output
 #
-# Complements 'nvflux powersave' by disabling audio power saving at the
-# kernel and audio-server level, eliminating crackling and dropouts that
-# are not caused by GPU P-state transitions.
+# Usage:
+#   ./scripts/setup-audio.sh          apply audio tuning
+#   ./scripts/setup-audio.sh --undo   remove audio tuning
 #
-# Auto-detects PipeWire (+ WirePlumber) or PulseAudio and applies the
-# appropriate configuration. Safe to run more than once.
-#
-# Usage: ./scripts/setup-audio.sh   (run as your normal user, NOT sudo)
-#        Will sudo internally only for the two steps that need root:
-#        writing /etc/modprobe.d/ and adding your user to the audio group.
+# Run as your normal user (NOT sudo).
+# Will sudo internally only for /etc/modprobe.d/ and usermod.
 #
 set -euo pipefail
 
 [ "$(id -u)" -eq 0 ] && echo "error: run as your normal user, not root." >&2 && exit 1
+
+UNDO=0
+for arg in "$@"; do
+    case "$arg" in
+        --undo) UNDO=1 ;;
+        *) echo "error: unknown argument '$arg'" >&2; exit 1 ;;
+    esac
+done
 
 die()  { echo "error: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
 ok()   { echo "    OK: $*"; }
 skip() { echo "    skip: $*"; }
 
-# ── 1. Kernel: disable HDA power saving ──────────────────────────────────────
 MODPROBE_CONF="/etc/modprobe.d/99-audio-disable-powersave.conf"
 MODPROBE_LINE="options snd_hda_intel power_save=0 power_save_controller=N"
+WP_CONF="$HOME/.config/wireplumber/wireplumber.conf.d/51-disable-suspend.conf"
+PA_DEFAULT_PA="$HOME/.config/pulse/default.pa"
+PA_DAEMON_CONF="$HOME/.config/pulse/daemon.conf"
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# UNDO
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if [ "$UNDO" -eq 1 ]; then
+    info "Kernel: removing snd_hda_intel power-save config"
+    if [ -f "$MODPROBE_CONF" ]; then
+        sudo rm -f "$MODPROBE_CONF"
+        ok "removed $MODPROBE_CONF (takes effect on next reboot)"
+    else
+        skip "$MODPROBE_CONF not found"
+    fi
+
+    info "WirePlumber: removing suspend config"
+    if [ -f "$WP_CONF" ]; then
+        rm -f "$WP_CONF"
+        ok "removed $WP_CONF"
+    else
+        skip "$WP_CONF not found"
+    fi
+
+    info "PulseAudio: removing suspend config"
+    if [ -f "$PA_DEFAULT_PA" ] && grep -q "module-suspend-on-idle" "$PA_DEFAULT_PA"; then
+        rm -f "$PA_DEFAULT_PA"
+        ok "removed $PA_DEFAULT_PA"
+    else
+        skip "$PA_DEFAULT_PA not modified by nvflux"
+    fi
+    if [ -f "$PA_DAEMON_CONF" ] && grep -q "exit-idle-time" "$PA_DAEMON_CONF"; then
+        sed -i '/^exit-idle-time/d' "$PA_DAEMON_CONF"
+        ok "removed exit-idle-time from $PA_DAEMON_CONF"
+    else
+        skip "$PA_DAEMON_CONF not modified by nvflux"
+    fi
+
+    info "Restarting audio server"
+    if systemctl --user is-active --quiet pipewire 2>/dev/null || pgrep -u "$USER" pipewire &>/dev/null; then
+        systemctl --user restart pipewire wireplumber
+        ok "PipeWire + WirePlumber restarted"
+    elif systemctl --user is-active --quiet pulseaudio 2>/dev/null || pgrep -u "$USER" pulseaudio &>/dev/null; then
+        systemctl --user restart pulseaudio 2>/dev/null \
+            || { pulseaudio --kill; pulseaudio --start --daemonize; }
+        ok "PulseAudio restarted"
+    else
+        skip "no running audio server detected"
+    fi
+
+    echo ""
+    echo "Audio tuning removed."
+    exit 0
+fi
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# APPLY
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# ── 1. Kernel: disable HDA power saving ──────────────────────────────────────
 info "Kernel: disabling snd_hda_intel power saving"
 if [ -f "$MODPROBE_CONF" ] && grep -qF "$MODPROBE_LINE" "$MODPROBE_CONF" 2>/dev/null; then
     skip "$MODPROBE_CONF already set"
@@ -61,14 +123,11 @@ info "Detected audio server: $AUDIO_SERVER"
 
 # ── 4a. PipeWire + WirePlumber ────────────────────────────────────────────────
 if [ "$AUDIO_SERVER" = "pipewire" ]; then
-    WP_CONF_DIR="$HOME/.config/wireplumber/wireplumber.conf.d"
-    WP_CONF="$WP_CONF_DIR/51-disable-suspend.conf"
-
     info "WirePlumber: disabling node suspend"
     if [ -f "$WP_CONF" ]; then
         skip "$WP_CONF already exists"
     else
-        mkdir -p "$WP_CONF_DIR"
+        mkdir -p "$(dirname "$WP_CONF")"
         cat > "$WP_CONF" << 'EOF'
 monitor.alsa.rules = [
   {
@@ -93,12 +152,8 @@ fi
 
 # ── 4b. PulseAudio ────────────────────────────────────────────────────────────
 if [ "$AUDIO_SERVER" = "pulseaudio" ]; then
-    PA_CONF_DIR="$HOME/.config/pulse"
-    PA_DEFAULT_PA="$PA_CONF_DIR/default.pa"
-    PA_DAEMON_CONF="$PA_CONF_DIR/daemon.conf"
-
     info "PulseAudio: disabling suspend-on-idle"
-    mkdir -p "$PA_CONF_DIR"
+    mkdir -p "$(dirname "$PA_DEFAULT_PA")"
 
     if [ -f "$PA_DEFAULT_PA" ] && grep -q "module-suspend-on-idle" "$PA_DEFAULT_PA"; then
         skip "$PA_DEFAULT_PA already modified"
@@ -133,4 +188,5 @@ echo "  - User audio group:            set"
 echo ""
 echo "Combine with:  nvflux powersave  (GPU P-state lock)"
 echo "for a complete fix of HDMI/DP audio dropouts."
+
 
