@@ -22,7 +22,7 @@ is momentarily disrupted and the audio stream drops out.
 **The fix is simple: lock the memory clock.**
 
 ```bash
-git clone https://github.com/habibimedwassim/NvFlux.git
+git clone https://github.com/hmwassim/NvFlux.git
 cd NvFlux
 ./setup.sh install   # install nvflux
 nvflux powersave     # lock the memory clock
@@ -72,7 +72,7 @@ The script is idempotent — safe to run multiple times.
 ## Installation
 
 ```bash
-git clone https://github.com/habibimedwassim/NvFlux.git
+git clone https://github.com/hmwassim/NvFlux.git
 cd NvFlux
 ./setup.sh install   # build and install nvflux
 ```
