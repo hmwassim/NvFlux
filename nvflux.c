@@ -24,8 +24,8 @@
 #define VERSION "1.0.0"
 #define MAX_CLOCKS 16
 
-/* Profile enum */
-typedef enum { PROFILE_AUTO, PROFILE_POWERSAVE, PROFILE_BALANCED, PROFILE_PERFORMANCE, PROFILE_ULTRA } Profile;
+/* Profile enum - PROFILE_INVALID must be -1 for error checking */
+typedef enum { PROFILE_INVALID = -1, PROFILE_AUTO, PROFILE_POWERSAVE, PROFILE_BALANCED, PROFILE_PERFORMANCE, PROFILE_ULTRA } Profile;
 
 /* Global nvidia-smi path */
 static char nvsmi[PATH_MAX];
@@ -251,7 +251,7 @@ static Profile profile_parse(const char *s) {
     if (strcmp(s, "performance") == 0) return PROFILE_PERFORMANCE;
     if (strcmp(s, "ultra") == 0) return PROFILE_ULTRA;
     if (strcmp(s, "auto") == 0) return PROFILE_AUTO;
-    return (Profile)-1;
+    return PROFILE_INVALID;
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -314,6 +314,62 @@ static void print_help(void) {
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
+ * Fuzzy match: suggest similar commands
+ * ─────────────────────────────────────────────────────────────────────────── */
+static const char *valid_cmds[] = {
+    "powersave", "balanced", "performance", "ultra", "auto",
+    "status", "clocks", "clock", "--restore", "--help", "--version", "-h", "-v",
+    NULL
+};
+
+static int levenshtein(const char *s1, const char *s2) {
+    size_t len1 = strlen(s1), len2 = strlen(s2);
+    if (len1 > len2) { const char *t = s1; s1 = s2; s2 = t; size_t tl = len1; len1 = len2; len2 = tl; }
+    if (len1 == 0) return (int)len2;
+    
+    unsigned int *prev = malloc((len2 + 1) * sizeof(unsigned int));
+    unsigned int *curr = malloc((len2 + 1) * sizeof(unsigned int));
+    if (!prev || !curr) { free(prev); free(curr); return -1; }
+    
+    for (size_t j = 0; j <= len2; j++) prev[j] = (unsigned int)j;
+    
+    for (size_t i = 1; i <= len1; i++) {
+        curr[0] = (unsigned int)i;
+        for (size_t j = 1; j <= len2; j++) {
+            unsigned int cost = (s1[i-1] == s2[j-1]) ? 0 : 1;
+            unsigned int del = prev[j] + 1;
+            unsigned int ins = curr[j-1] + 1;
+            unsigned int sub = prev[j-1] + cost;
+            curr[j] = del < ins ? del : ins;
+            curr[j] = curr[j] < sub ? curr[j] : sub;
+        }
+        unsigned int *t = prev; prev = curr; curr = t;
+    }
+    int result = (int)prev[len2];
+    free(prev); free(curr);
+    return result;
+}
+
+static void suggest_command(const char *bad_cmd) {
+    int best_dist = 999;
+    const char *best_match = NULL;
+    
+    for (int i = 0; valid_cmds[i]; i++) {
+        int dist = levenshtein(bad_cmd, valid_cmds[i]);
+        if (dist >= 0 && dist < best_dist) {
+            best_dist = dist;
+            best_match = valid_cmds[i];
+        }
+    }
+    
+    fprintf(stderr, "error: unknown command '%s'\n", bad_cmd);
+    if (best_match && best_dist <= 2) {
+        fprintf(stderr, "did you mean '%s'?\n", best_match);
+    }
+    fprintf(stderr, "Run 'nvflux --help' for usage.\n");
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
  * Main
  * ─────────────────────────────────────────────────────────────────────────── */
 int main(int argc, char **argv) {
@@ -363,10 +419,10 @@ int main(int argc, char **argv) {
         char mode[64] = {0};
         if (!state_read(mode, sizeof(mode))) { fprintf(stderr, "error: no saved profile\n"); return 1; }
         p = profile_parse(mode);
-        if (p < 0) { fprintf(stderr, "error: invalid saved profile '%s'\n", mode); return 1; }
+        if (p == PROFILE_INVALID) { fprintf(stderr, "error: invalid saved profile '%s'\n", mode); return 1; }
     } else {
         p = profile_parse(cmd);
-        if (p < 0) { fprintf(stderr, "error: unknown command '%s'\n", cmd); return 4; }
+        if (p == PROFILE_INVALID) { suggest_command(cmd); return 4; }
     }
 
     if (apply_profile(p) != 0) return 1;

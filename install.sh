@@ -4,11 +4,74 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_BIN="/usr/local/bin/nvflux"
+STATE_DIR="/var/lib/nvflux"
+AUTOSTART_FILE="/etc/xdg/autostart/nvflux-restore.desktop"
+BACKUP_BIN="/usr/local/bin/nvflux.bak"
 
-die() { echo "error: $*" >&2; exit 1; }
-info() { echo "==> $*"; }
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+die() { echo -e "${RED}error:${NC} $*" >&2; exit 1; }
+info() { echo -e "${BLUE}==>${NC} $*"; }
+warn() { echo -e "${YELLOW}warning:${NC} $*" >&2; }
+success() { echo -e "${GREEN}✓${NC} $*"; }
+
+# Trap for cleanup on error
+cleanup() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        warn "Installation failed (exit code: $exit_code)"
+        if [ -f "$BACKUP_BIN" ]; then
+            warn "Restoring previous version..."
+            mv -f "$BACKUP_BIN" "$INSTALL_BIN" 2>/dev/null || true
+        fi
+    fi
+}
+trap cleanup EXIT
 
 [ "$(id -u)" -eq 0 ] || die "must run as root (sudo $0)"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pre-installation checks
+# ──────────────────────────────────────────────────────────────────────────────
+pre_checks() {
+    info "Running pre-installation checks..."
+
+    # Check disk space (need at least 10MB)
+    local available_kb
+    available_kb=$(df -k /usr/local 2>/dev/null | awk 'NR==2 {print $4}')
+    if [ -n "$available_kb" ] && [ "$available_kb" -lt 10240 ]; then
+        die "Insufficient disk space (need at least 10MB)"
+    fi
+
+    # Check if /usr/local/bin is writable
+    if [ ! -d "/usr/local/bin" ]; then
+        mkdir -p /usr/local/bin || die "Failed to create /usr/local/bin"
+    fi
+
+    # Check for conflicting installations
+    if [ -f "$INSTALL_BIN" ] && [ ! -L "$INSTALL_BIN" ]; then
+        info "Found existing installation at $INSTALL_BIN"
+        if [ -x "$INSTALL_BIN" ]; then
+            local existing_ver
+            existing_ver=$("$INSTALL_BIN" --version 2>/dev/null || echo "unknown")
+            info "Existing version: $existing_ver"
+        fi
+    fi
+
+    # Check state directory permissions
+    if [ -d "$STATE_DIR" ]; then
+        if [ ! -w "$STATE_DIR" ]; then
+            warn "State directory $STATE_DIR is not writable"
+        fi
+    fi
+
+    success "Pre-installation checks passed"
+}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Check if NVIDIA drivers are installed (required)
@@ -18,23 +81,30 @@ check_nvidia() {
 
     # Search common paths for nvidia-smi
     if command -v nvidia-smi >/dev/null 2>&1; then
-        info "Found: $(command -v nvidia-smi)"
+        local nvsmi_path
+        nvsmi_path="$(command -v nvidia-smi)"
+        success "Found nvidia-smi at: $nvsmi_path"
+        
+        # Verify it actually works
+        if ! nvidia-smi --query-gpu=name --format=csv,noheader >/dev/null 2>&1; then
+            warn "nvidia-smi found but not responding - drivers may be broken"
+        fi
         return 0
     fi
 
     for path in /usr/bin/nvidia-smi /usr/local/bin/nvidia-smi; do
         if [ -x "$path" ]; then
-            info "Found: $path"
+            success "Found nvidia-smi at: $path"
             return 0
         fi
     done
 
     # Not found - prompt user
     echo ""
-    echo "⚠ NVIDIA drivers not detected!"
+    echo -e "${RED}⚠ NVIDIA drivers not detected!${NC}"
     echo ""
     echo "Please install NVIDIA drivers for your distribution first,"
-    echo "then run: sudo ./install.sh"
+    echo "then run: sudo $0"
     echo ""
     echo "Installation instructions: https://www.nvidia.com/object/unix.html"
     echo ""
@@ -110,8 +180,25 @@ install_deps() {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Backup existing installation
+# ──────────────────────────────────────────────────────────────────────────────
+backup_existing() {
+    if [ -f "$INSTALL_BIN" ] && [ ! -L "$INSTALL_BIN" ]; then
+        info "Backing up existing installation..."
+        cp -f "$INSTALL_BIN" "$BACKUP_BIN" || {
+            warn "Failed to create backup"
+            return 1
+        }
+        success "Backup created at $BACKUP_BIN"
+    fi
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Main installation
 # ──────────────────────────────────────────────────────────────────────────────
+
+# Run pre-installation checks
+pre_checks
 
 # Check for NVIDIA drivers first (will abort if not found)
 check_nvidia
@@ -119,24 +206,46 @@ check_nvidia
 # Install build dependencies
 install_deps
 
+# Backup existing installation before making changes
+backup_existing || true
+
 info "Building nvflux..."
-make -C "$SCRIPT_DIR" clean >/dev/null 2>&1 || true
-make -C "$SCRIPT_DIR"
+if ! make -C "$SCRIPT_DIR" clean >/dev/null 2>&1; then
+    warn "Clean failed, continuing anyway"
+fi
+
+if ! make -C "$SCRIPT_DIR"; then
+    die "Build failed"
+fi
+success "Build completed"
 
 info "Installing to $INSTALL_BIN..."
-make -C "$SCRIPT_DIR" install
+if ! make -C "$SCRIPT_DIR" install; then
+    die "Installation failed"
+fi
+success "Binary installed"
+
+# Remove backup if installation succeeded
+if [ -f "$BACKUP_BIN" ]; then
+    rm -f "$BACKUP_BIN"
+fi
 
 info "Cleaning up build artifacts..."
-make -C "$SCRIPT_DIR" clean
+make -C "$SCRIPT_DIR" clean >/dev/null 2>&1 || true
 
 info "Creating state directory..."
-mkdir -p /var/lib/nvflux
-chmod 755 /var/lib/nvflux
+if ! mkdir -p "$STATE_DIR"; then
+    die "Failed to create state directory"
+fi
+chmod 755 "$STATE_DIR"
+success "State directory created at $STATE_DIR"
 
 info "Installing autostart (system-wide)..."
 AUTOSTART_DIR="/etc/xdg/autostart"
-mkdir -p "$AUTOSTART_DIR"
-cat > "$AUTOSTART_DIR/nvflux-restore.desktop" << 'EOF'
+if ! mkdir -p "$AUTOSTART_DIR"; then
+    die "Failed to create autostart directory"
+fi
+cat > "$AUTOSTART_FILE" << 'EOF'
 [Desktop Entry]
 Type=Application
 Name=nvflux
@@ -148,10 +257,42 @@ Hidden=false
 X-GNOME-Autostart-enabled=true
 X-KDE-autostart-after=panel
 EOF
-chmod 644 "$AUTOSTART_DIR/nvflux-restore.desktop"
+chmod 644 "$AUTOSTART_FILE"
+success "Autostart installed at $AUTOSTART_FILE"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Verify installation
+# ──────────────────────────────────────────────────────────────────────────────
+verify_installation() {
+    info "Verifying installation..."
+    
+    # Check binary exists and is executable
+    if [ ! -x "$INSTALL_BIN" ]; then
+        die "Installation verification failed: binary not executable"
+    fi
+    
+    # Check setuid bit
+    if [ ! -u "$INSTALL_BIN" ]; then
+        warn "setuid bit not set - some features may require root"
+    fi
+    
+    # Test version command
+    if ! "$INSTALL_BIN" --version >/dev/null 2>&1; then
+        die "Installation verification failed: binary not working"
+    fi
+    
+    # Test help command (requires nvidia-smi)
+    if ! "$INSTALL_BIN" status >/dev/null 2>&1; then
+        warn "Status command failed - nvidia-smi may not be accessible"
+    fi
+    
+    success "Installation verified successfully"
+}
+
+verify_installation
 
 echo ""
-echo "✓ nvflux $(nvflux --version) installed"
+success "nvflux $(nvflux --version) installed successfully!"
 echo ""
 echo "Usage:"
 echo "  nvflux powersave     # Lock memory (audio fix)"
