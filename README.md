@@ -1,256 +1,163 @@
-# NvFlux
+# nvflux
 
-Fix HDMI/DisplayPort audio dropouts on NVIDIA GPUs — and take deterministic control of GPU clock profiles from the command line.
+NVIDIA GPU clock manager for Linux. Fixes HDMI/DisplayPort audio dropouts by locking memory clocks.
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-red.svg)](LICENSE)
+Works on any distro, any desktop, any user. No sudo needed after install.
+
+---
+
+## Quick Start
+
+```bash
+git clone https://github.com/hmwassim/nvflux.git
+cd nvflux
+sudo ./install.sh    # Install (only time you need sudo)
+nvflux powersave     # Lock clocks - fixes audio dropouts
+```
+
+That's it. The profile sticks across reboots and works for all users.
 
 ---
 
 ## The Problem
 
-If your monitor is connected to your NVIDIA GPU via HDMI or DisplayPort and you use its
-built-in speakers or audio output, you have probably heard this: random audio stutters,
-brief dropouts, or sudden silence — most often during quiet desktop moments like
-scrolling, switching windows, or leaving the machine idle.
+NVIDIA GPUs constantly adjust memory clocks based on load. This causes audio dropouts because the memory controller and HDMI/DP audio share the same clock domain. Every clock change = brief audio glitch.
 
-This is not a driver bug — it is GPU power management working as designed. NVIDIA
-continuously shifts the GPU between P-states based on instantaneous load. The GPU's
-memory controller and its HDMI/DP audio controller share the same clock domain. Every
-time the driver raises or lowers the memory clock, the audio controller's clock source
-is momentarily disrupted and the audio stream drops out.
-
-**The fix is simple: lock the memory clock.**
-
-```bash
-git clone https://github.com/hmwassim/NvFlux.git
-cd NvFlux
-./setup.sh install   # install nvflux
-nvflux powersave     # lock the memory clock
-nvflux --restore     # add to autostart to survive reboots
-```
-
-`powersave` pins to the lowest memory tier — enough to stop P-state transitions, with
-minimal extra power draw or fan noise. Use `balanced` or `performance` if you also need
-higher memory bandwidth for rendering or gaming.
-
----
-
-## How It Works
-
-- NVIDIA drivers dynamically scale memory clocks based on instantaneous load
-- The memory controller and HDMI/DP audio controller share a clock source
-- Memory clock change → audio clock destabilization → dropout
-- Locking the memory clock to any fixed tier prevents P-state transitions on the memory bus
-
-NvFlux is a thin, controlled wrapper around `nvidia-smi` clock-locking commands with
-strict argument validation, no shell execution, minimal privileged surface, and
-XDG-compliant state storage.
-
----
-
-## Optional: Full Audio Stack Tuning
-
-`nvflux powersave` fixes dropouts caused by GPU P-state transitions. If you still hear
-crackling or intermittent dropouts, the audio server itself may be suspending idle
-devices. Run the companion command for a complete fix:
-
-```bash
-./setup.sh audio
-```
-
-What it does:
-- Disables `snd_hda_intel` power saving in `/etc/modprobe.d/` (takes effect on reboot)
-- Adds your user to the `audio` group
-- Disables device suspend in **WirePlumber** (PipeWire setups), or disables
-  `module-suspend-on-idle` in **PulseAudio** — auto-detected, no manual config needed
-- Restarts the audio server immediately so changes take effect without a reboot
-
-The script is idempotent — safe to run multiple times.
-
----
-
-## Installation
-
-```bash
-git clone https://github.com/hmwassim/NvFlux.git
-cd NvFlux
-./setup.sh install   # build and install nvflux
-```
-
-See [docs/INSTALLATION.md](docs/INSTALLATION.md) for per-distro dependency commands and
-autostart setup.
+**Fix:** Lock the memory clock. No more transitions, no more dropouts.
 
 ---
 
 ## Profiles
 
-| Profile       | Memory clock | GPU core | Use when                                   |
-|---------------|--------------|----------|--------------------------------------------|
-| `powersave`   | lowest tier  | adaptive | Audio fix, idle desktop, battery saving    |
-| `balanced`    | mid tier     | adaptive | General desktop + light rendering          |
-| `performance` | max tier     | adaptive | Gaming, GPU compute, heavy rendering       |
-| `ultra`       | max tier     | max      | Benchmarking, maximum sustained throughput |
-| `auto`        | driver       | driver   | Restore NVIDIA default dynamic behavior    |
+| Profile | What it does | When to use |
+|---------|--------------|-------------|
+| `powersave` | Lowest memory clock | Audio fix, desktop use (recommended) |
+| `balanced` | Mid memory clock | Light gaming, general use |
+| `performance` | Highest memory clock | Gaming, rendering |
+| `ultra` | Max memory + GPU clock | Benchmarking |
+| `auto` | Unlock everything | Reset to defaults |
 
 ---
 
-## Command Reference
+## Usage
 
 ```bash
-nvflux powersave     # Lock memory to lowest tier  (recommended for audio fix)
-nvflux balanced      # Lock memory to mid tier
-nvflux performance   # Lock memory to highest tier
-nvflux ultra         # Lock memory + GPU core to maximum
-nvflux auto          # Unlock everything — driver-managed P-states
+nvflux powersave     # Lock to lowest (audio fix)
+nvflux balanced      # Lock to mid
+nvflux performance   # Lock to highest
+nvflux ultra         # Lock everything to max
+nvflux auto          # Unlock (driver-managed)
 
-nvflux status        # Show the last saved profile
-nvflux clock         # Print current memory clock in MHz
-nvflux --restore     # Re-apply the last saved profile (use in autostart)
-nvflux --version
-nvflux --help
+nvflux status        # What's my current profile?
+nvflux clocks        # What are my current clocks? (memory + GPU)
 ```
+
+**No sudo needed** - the binary handles privileges automatically.
 
 ---
 
-## Autostart
+## How It Works
 
-**i3 / Sway** (`~/.config/i3/config` or `~/.config/sway/config`):
-```
-exec --no-startup-id nvflux --restore
-```
+- **Binary:** `/usr/local/bin/nvflux` (setuid root)
+- **State:** `/var/lib/nvflux/state` (shared by all users)
+- **Autostart:** `/etc/xdg/autostart/nvflux-restore.desktop` (runs on login for all users)
 
-**systemd user service** — see [docs/INSTALLATION.md](docs/INSTALLATION.md#autostart-configuration).
-
----
-
-## Security Model
-
-NvFlux installs a minimal setuid-root binary for clock locking.
-
-- Fixed allowlist of accepted arguments — no arbitrary input reaches `nvidia-smi`
-- `nvidia-smi` is exec'd directly — no shell, no string injection
-- Privileges are dropped immediately after the privileged operation
-- Read-only commands (`status`, `clock`) never elevate
-- State file created mode `0600`, always owned by the real (unprivileged) user
-
-See [docs/SECURITY.md](docs/SECURITY.md) for the full analysis.
+The setuid bit lets the binary run with root privileges when needed, so you never have to type `sudo`.
 
 ---
 
-## Building
+## Installation
+
+### Requirements
+
+- NVIDIA GPU (Maxwell or newer, Volta+ for full support)
+- NVIDIA drivers installed (`nvidia-smi` must exist)
+- Any Linux distro
+
+### Install
 
 ```bash
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-ctest -V          # unit tests — no GPU or root required
+git clone https://github.com/hmwassim/nvflux.git
+cd nvflux
+sudo ./install.sh
 ```
 
-**gcc fallback** (no cmake):
-```bash
-gcc -O2 -std=c11 -Iinclude \
-    src/main.c src/nvidia.c src/profile.c src/state.c \
-    -o nvflux
-```
+The installer:
+1. Checks for NVIDIA drivers (aborts if missing)
+2. Installs build tools if needed (gcc, make)
+3. Builds nvflux
+4. Sets up system-wide autostart
+
+### Supported Distros
+
+Auto-detects and installs build dependencies for:
+
+- Debian/Ubuntu/Mint/Pop!_OS (APT)
+- Fedora/RHEL/CentOS (DNF/YUM)
+- Arch/Manjaro (Pacman)
+- openSUSE (Zypper)
+- Gentoo (Portage)
+- Void (XBPS)
+- Alpine (APK)
+- NixOS (Nix)
+- Solus (Eopkg)
+
+If your distro isn't listed, just make sure `gcc` and `make` are installed.
 
 ---
 
-## Requirements
+## Multi-User Setup
 
-**Runtime:** NVIDIA drivers with `nvidia-smi` (Volta+ for clock locking) — install
-these through your distro's preferred method before running nvflux.
+Everything is system-wide:
 
-**Build dependencies:** C11 compiler, CMake 3.10+, gzip
+```bash
+# Admin installs and sets profile
+sudo ./install.sh
+nvflux powersave
 
-**Arch Linux**
-```bash
-sudo pacman -S base-devel cmake gzip
+# User1 logs in → autostart applies "powersave"
+# User2 logs in → autostart applies "powersave"
+# User3 logs in → autostart applies "powersave"
 ```
-**Debian / Ubuntu**
+
+All users share the same profile. No per-user config needed.
+
+---
+
+## Uninstall
+
 ```bash
-sudo apt install build-essential cmake gzip
+sudo ./uninstall.sh
 ```
-**Fedora**
-```bash
-sudo dnf install @development-tools cmake gzip
-```
-**openSUSE**
-```bash
-sudo zypper install -t pattern devel_C_C++ cmake gzip
-```
-**Solus**
-```bash
-sudo eopkg it -c system.devel
-```
-**Void Linux**
-```bash
-sudo xbps-install -S base-devel cmake gzip
-```
+
+Removes the binary, autostart, and state file.
 
 ---
 
 ## Troubleshooting
 
-**Audio dropout still happens after `nvflux powersave`**  
-Run `nvflux clock` several times — the value must be stable. If it keeps changing, the
-lock did not apply.
+**"NVIDIA drivers not detected"**
+Install drivers for your distro first. Check https://www.nvidia.com/object/unix.html
 
-**Memory clock not changing (Hopper / Ada Lovelace GPU)**  
-NvFlux automatically falls back to `--lock-memory-clocks-deferred`. The lock takes
-effect after a driver reload:
-```bash
-sudo rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia && sudo modprobe nvidia
-```
+**"nvflux requires root privileges"**
+The setuid bit wasn't set. Re-run: `sudo ./install.sh`
 
-**`nvidia-smi not found`**  
-Install NVIDIA drivers and ensure `nvidia-smi` is in PATH or `/usr/bin`.
+**Audio still dropping out**
+Run `nvflux clock` a few times - the number should be stable. If it's changing, the lock didn't apply.
 
-**`No devices were found`**  
-```bash
-sudo modprobe nvidia
-```
-
-**Permission denied after install**  
-`ls -l /usr/local/bin/nvflux` must show `-rwsr-xr-x`.
-```bash
-sudo chown root:root /usr/local/bin/nvflux && sudo chmod 4755 /usr/local/bin/nvflux
-```
+**Want to change profile later**
+Just run `nvflux <profile>` - no sudo needed.
 
 ---
 
-## Architecture
+## Why This Exists
 
-```
-include/nvflux.h    — Profile enum, version string
-src/
-  main.c            — argument parsing, privilege checks, exit codes
-  nvidia.h/.c       — all nvidia-smi interaction (find, exec, parse, lock)
-  profile.h/.c      — profile apply logic, name ↔ enum mapping
-  state.h/.c        — XDG state file (~/.local/state/nvflux/state)
-tests/
-  test_parse.c      — unit tests (no GPU, no root needed)
-```
+Most GPU clock tools are overengineered - GUI apps, complex configs, systemd dependencies. This is just a single binary that does one thing: locks memory clocks so audio doesn't stutter.
+
+No GUI, no config files, no systemd requirements. Just `nvflux powersave` and you're done.
 
 ---
-
-## Uninstallation
-
-```bash
-sudo ./scripts/uninstall.sh
-```
-
----
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
-
-## See Also
-
-- [nvidia-smi documentation](https://docs.nvidia.com/deploy/nvidia-smi/index.html)
-- [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html)
-
+MIT

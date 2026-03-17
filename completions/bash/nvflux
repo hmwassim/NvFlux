@@ -1,8 +1,0 @@
-# bash completion for nvflux
-_nvflux()
-{
-    local cur="${COMP_WORDS[COMP_CWORD]}"
-    local commands="ultra performance balanced powersave auto status clock --restore --help --version"
-    COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
-}
-complete -F _nvflux nvflux
