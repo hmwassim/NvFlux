@@ -128,48 +128,50 @@ install_deps() {
         # Debian, Ubuntu, Linux Mint, Pop!_OS, Kali
         info "Detected APT (Debian/Ubuntu family)"
         apt-get update -qq
-        apt-get install -y -qq build-essential make || die "Failed to install dependencies"
+        apt-get install -y -qq build-essential || die "Failed to install dependencies"
     elif command -v dnf >/dev/null 2>&1; then
-        # Fedora, RHEL, CentOS 8+
+        # Fedora, RHEL 8+, CentOS 8+
         info "Detected DNF (Fedora/RHEL family)"
-        dnf install -y gcc make gcc-c++ >/dev/null || die "Failed to install dependencies"
+        dnf install @development-tools >/dev/null || \
+        dnf install -y gcc gcc-c++ make >/dev/null || die "Failed to install dependencies"
     elif command -v yum >/dev/null 2>&1; then
         # CentOS 7, older RHEL
         info "Detected YUM (CentOS/RHEL)"
-        yum install -y gcc make gcc-c++ >/dev/null || die "Failed to install dependencies"
+        yum groupinstall -y "Development Tools" >/dev/null || \
+        yum install -y gcc gcc-c++ make >/dev/null || die "Failed to install dependencies"
     elif command -v pacman >/dev/null 2>&1; then
         # Arch Linux, Manjaro, EndeavourOS
         info "Detected Pacman (Arch family)"
-        pacman -Sy --noconfirm base-devel make >/dev/null || die "Failed to install dependencies"
+        pacman -Sy --noconfirm base-devel >/dev/null || die "Failed to install dependencies"
     elif command -v zypper >/dev/null 2>&1; then
         # openSUSE
         info "Detected Zypper (openSUSE)"
-        zypper install -y -q patterns-devel-base-devel_basis make >/dev/null || \
-        zypper install -y -q gcc make >/dev/null || die "Failed to install dependencies"
+        zypper install -y -t pattern devel_basis >/dev/null || \
+        zypper install -y -q gcc gcc-c++ make >/dev/null || die "Failed to install dependencies"
     elif command -v xbps-install >/dev/null 2>&1; then
         # Void Linux
         info "Detected XBPS (Void Linux)"
-        xbps-install -Sy base-devel make >/dev/null || die "Failed to install dependencies"
+        xbps-install -Sy base-devel >/dev/null || die "Failed to install dependencies"
     elif command -v emerge >/dev/null 2>&1; then
-        # Gentoo
-        info "Detected Portage (Gentoo)"
-        emerge --quiet sys-devel/gcc sys-devel/make || die "Failed to install dependencies"
+        # Gentoo / Funtoo
+        info "Detected Portage (Gentoo/Funtoo)"
+        emerge --quiet sys-devel/gcc sys-devel/make sys-devel/binutils || die "Failed to install dependencies"
     elif command -v apk >/dev/null 2>&1; then
         # Alpine Linux
         info "Detected APK (Alpine Linux)"
-        apk add --quiet build-base make >/dev/null || die "Failed to install dependencies"
+        apk add --quiet build-base >/dev/null || die "Failed to install dependencies"
     elif command -v nix-env >/dev/null 2>&1; then
         # NixOS
         info "Detected Nix (NixOS)"
-        nix-env -iA nixpkgs.gcc nixpkgs.gnumake >/dev/null || die "Failed to install dependencies"
+        nix-env -iA nixpkgs.gcc nixpkgs.gnumake nixpkgs.binutils >/dev/null || die "Failed to install dependencies"
     elif command -v eopkg >/dev/null 2>&1; then
         # Solus
         info "Detected Eopkg (Solus)"
-        eopkg install -y -c system.devel make >/dev/null || die "Failed to install dependencies"
-    elif command -v pi >/dev/null 2>&1; then
-        # Pardus
-        info "Detected Pi (Pardus)"
-        pi install -y build-essential make >/dev/null || die "Failed to install dependencies"
+        eopkg install -y -c system.devel >/dev/null || die "Failed to install dependencies"
+    elif command -v pisi >/dev/null 2>&1; then
+        # Pardus (old, uses pisi)
+        info "Detected PISI (Pardus)"
+        pisi install -y development-tools >/dev/null || die "Failed to install dependencies"
     else
         info "Unknown package manager - please install gcc and make manually"
         info "Continuing anyway (build may fail if tools are missing)..."
